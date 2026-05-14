@@ -1,0 +1,12 @@
+{
+  "name": "@resale-intelligence/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "echo 'db build stub'",
+    "check": "echo 'db check stub'"
+  }
+}

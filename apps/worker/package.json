@@ -1,0 +1,18 @@
+{
+  "name": "@resale-intelligence/worker",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node src/server.js",
+    "start": "node src/server.js",
+    "migrate": "node src/cli.js migrate",
+    "seed:demo": "node src/cli.js seed-demo",
+    "sync:all": "node src/cli.js sync-all",
+    "run:profile": "node src/cli.js run-profile",
+    "check": "node --check src/server.js && node --check src/cli.js"
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
+  }
+}

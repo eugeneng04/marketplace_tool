@@ -1,0 +1,17 @@
+{
+  "name": "resale-intelligence",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first resale intelligence platform for Marketplace data capture, parsing, and deal scoring.",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "packages/connectors/*"
+  ],
+  "scripts": {
+    "build": "npm run --workspaces build",
+    "check": "npm run --workspaces check",
+    "dev:web": "npm --workspace @resale-intelligence/web run dev",
+    "dev:worker": "npm --workspace @resale-intelligence/worker run dev"
+  }
+}

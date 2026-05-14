@@ -1,0 +1,11 @@
+{
+  "name": "@resale-intelligence/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "echo 'web dev stub'",
+    "build": "echo 'web build stub'",
+    "check": "echo 'web check stub'"
+  }
+}

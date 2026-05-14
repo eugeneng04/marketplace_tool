@@ -1,0 +1,12 @@
+{
+  "name": "@resale-intelligence/valuation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "echo 'valuation build stub'",
+    "check": "echo 'valuation check stub'"
+  }
+}
