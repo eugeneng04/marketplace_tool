@@ -24,13 +24,26 @@ Backend-first MVP for local-first resale intelligence, designed to run as a web 
 - Node 22+
 - PostgreSQL 14+
 
+## Connector modes
+
+- `mock`: deterministic synthetic Marketplace data for testing.
+- `facebook_html`: authenticated HTML ingestion from Facebook Marketplace search pages.
+
+`facebook_html` is best-effort parsing and depends on page structure. Keep the connector isolated so it can be iterated independently.
+
 ## Environment variables
 
 - `DATABASE_URL` (required)
 - `PORT` (optional, default `10000`)
 - `API_TOKEN` (optional but recommended for non-health endpoints)
-- `CONNECTOR_MODE` (`mock` for MVP seed runs)
+- `CONNECTOR_MODE` (`mock` or `facebook_html`)
 - `PREFER_MANUAL_TRANSMISSION` (`true` or `false`)
+- `MAX_CARDS_PER_RUN` (default `25`)
+
+When `CONNECTOR_MODE=facebook_html`:
+- `FB_COOKIE` (required)
+- `FB_USER_AGENT` (optional)
+- `FB_SEARCH_BASE_URL` (optional, default `https://www.facebook.com/marketplace/search/`)
 
 ## Worker app commands
 

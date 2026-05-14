@@ -16,6 +16,14 @@ services:
         value: us-ca
       - key: PREFER_MANUAL_TRANSMISSION
         value: "true"
+      - key: MAX_CARDS_PER_RUN
+        value: "25"
+      - key: FB_USER_AGENT
+        value: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36
+      - key: FB_SEARCH_BASE_URL
+        value: https://www.facebook.com/marketplace/search/
+      - key: FB_COOKIE
+        sync: false
       - key: API_TOKEN
         generateValue: true
       - key: DATABASE_URL

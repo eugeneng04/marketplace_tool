@@ -1,5 +1,5 @@
 import { assertConfig, loadConfig } from "./config.js";
-import { createDb, createProfile, listEnabledProfiles, migrate } from "./db.js";
+import { createDb, createProfile, getProfile, listEnabledProfiles, migrate } from "./db.js";
 import { createFacebookConnector } from "./facebookConnector.js";
 import { runProfileSync } from "./syncEngine.js";
 
@@ -17,6 +17,16 @@ function parseArgs(argv) {
   }
 
   return result;
+}
+
+function buildConnector(config) {
+  return createFacebookConnector({
+    mode: config.connectorMode,
+    facebookCookie: config.facebookCookie,
+    facebookUserAgent: config.facebookUserAgent,
+    facebookSearchBaseUrl: config.facebookSearchBaseUrl,
+    maxCardsPerRun: config.maxCardsPerRun
+  });
 }
 
 async function withDb(task) {
@@ -71,11 +81,11 @@ async function run() {
   if (command === "sync-all") {
     await withDb(async ({ db, config }) => {
       await migrate(db);
-      const connector = createFacebookConnector({ mode: config.connectorMode });
+      const connector = buildConnector(config);
       const profiles = await listEnabledProfiles(db);
 
       // eslint-disable-next-line no-console
-      console.log(`Running ${profiles.length} profile(s)...`);
+      console.log(`Running ${profiles.length} profile(s) with mode=${config.connectorMode}...`);
 
       for (const profile of profiles) {
         const summary = await runProfileSync({
@@ -99,13 +109,16 @@ async function run() {
 
     await withDb(async ({ db, config }) => {
       await migrate(db);
-      const profiles = await listEnabledProfiles(db);
-      const profile = profiles.find((row) => row.id === profileId);
+      const profile = await getProfile(db, profileId);
       if (!profile) {
-        throw new Error(`Profile ${profileId} not found or disabled.`);
+        throw new Error(`Profile ${profileId} not found.`);
       }
 
-      const connector = createFacebookConnector({ mode: config.connectorMode });
+      if (!profile.enabled) {
+        throw new Error(`Profile ${profileId} is disabled.`);
+      }
+
+      const connector = buildConnector(config);
       const summary = await runProfileSync({
         db,
         connector,

@@ -58,6 +58,16 @@ function parseProfileInput(body) {
   };
 }
 
+function buildConnector(config) {
+  return createFacebookConnector({
+    mode: config.connectorMode,
+    facebookCookie: config.facebookCookie,
+    facebookUserAgent: config.facebookUserAgent,
+    facebookSearchBaseUrl: config.facebookSearchBaseUrl,
+    maxCardsPerRun: config.maxCardsPerRun
+  });
+}
+
 export async function createApp() {
   const config = loadConfig();
   assertConfig(config);
@@ -65,7 +75,7 @@ export async function createApp() {
   const db = createDb(config.databaseUrl);
   await migrate(db);
 
-  const connector = createFacebookConnector({ mode: config.connectorMode });
+  const connector = buildConnector(config);
 
   const server = createServer(async (req, res) => {
     if (!req.url || !req.method) {
