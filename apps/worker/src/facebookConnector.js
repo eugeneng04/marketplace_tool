@@ -117,7 +117,10 @@ async function fetchHtml(url, headers) {
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status} while fetching ${url}`);
+      const body = await response.text().catch(() => "");
+      const compactBody = normalizeText(body).slice(0, 180);
+      const bodyHint = compactBody ? ` :: ${compactBody}` : "";
+      throw new Error(`HTTP ${response.status} while fetching ${url}${bodyHint}`);
     }
 
     return await response.text();
@@ -272,17 +275,25 @@ function createMockConnector(mode, maxCards) {
 }
 
 function createFacebookHtmlConnector({ facebookCookie, facebookUserAgent, facebookSearchBaseUrl, maxCardsPerRun }) {
-  const headers = {
+  const baseHeaders = {
     "user-agent": facebookUserAgent,
-    accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "accept-language": "en-US,en;q=0.9",
+    "cache-control": "max-age=0",
     cookie: facebookCookie
   };
 
   return {
     async captureListingCards(profile) {
       const searchUrl = buildSearchUrl(profile, facebookSearchBaseUrl);
-      const html = await fetchHtml(searchUrl, headers);
+      const html = await fetchHtml(searchUrl, {
+        ...baseHeaders,
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "none",
+        "sec-fetch-user": "?1",
+        "upgrade-insecure-requests": "1"
+      });
       if (/log into facebook|you must log in/i.test(html)) {
         throw new Error("Facebook session appears invalid or logged out. Refresh FB_COOKIE.");
       }
@@ -303,7 +314,14 @@ function createFacebookHtmlConnector({ facebookCookie, facebookUserAgent, facebo
     },
 
     async fetchListingDetail(card) {
-      const html = await fetchHtml(card.listingUrl, headers);
+      const html = await fetchHtml(card.listingUrl, {
+        ...baseHeaders,
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "same-origin",
+        "upgrade-insecure-requests": "1",
+        referer: "https://www.facebook.com/marketplace/"
+      });
       const detail = extractDetailFromHtml(card.listingUrl, html);
 
       // Keep better card-level values when detail parsing is weak.
