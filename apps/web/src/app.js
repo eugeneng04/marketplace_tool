@@ -1,13 +1,9 @@
 const statusOptions = ["new", "watching", "saved", "contacted", "rejected", "sold", "hidden"];
 const savedApiBase = localStorage.getItem("ri.apiBase");
 const pageIsRemote = !["localhost", "127.0.0.1"].includes(window.location.hostname);
-const savedApiBaseIsLoopback = /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(savedApiBase ?? "");
 
 const state = {
-  apiBase:
-    !savedApiBase || (pageIsRemote && savedApiBaseIsLoopback)
-      ? (pageIsRemote ? window.location.origin : `http://${window.location.hostname}:10000`)
-      : savedApiBase,
+  apiBase: pageIsRemote ? window.location.origin : (savedApiBase || `http://${window.location.hostname}:10000`),
   apiToken: localStorage.getItem("ri.apiToken") || "",
   view: "dashboard",
   profiles: [],
@@ -1028,14 +1024,17 @@ async function searchFacebook(event) {
 
 function bindEvents() {
   $("#apiBaseInput").value = state.apiBase;
+  $("#apiBaseInput").closest("label").hidden = pageIsRemote;
+  $("#connection-title").textContent = "App access";
+  $("#healthButton").textContent = "Connect";
   $("#apiTokenInput").value = state.apiToken;
 
   $("#apiBaseInput").addEventListener("change", (event) => {
-    state.apiBase = event.target.value.replace(/\/$/, "");
+    state.apiBase = pageIsRemote ? window.location.origin : event.target.value.trim().replace(/\/$/, "");
     localStorage.setItem("ri.apiBase", state.apiBase);
   });
   $("#apiTokenInput").addEventListener("change", (event) => {
-    state.apiToken = event.target.value;
+    state.apiToken = event.target.value.trim();
     localStorage.setItem("ri.apiToken", state.apiToken);
   });
   $$(".nav-button").forEach((button) => button.addEventListener("click", () => setView(button.dataset.view)));
@@ -1045,8 +1044,13 @@ function bindEvents() {
   $("#refreshRunsButton").addEventListener("click", loadRuns);
   $("#healthButton").addEventListener("click", async () => {
     try {
-      await api("/health");
-      $("#healthStatus").textContent = "Worker is reachable.";
+      $("#healthStatus").textContent = "Connecting… The free server may take a minute to wake up.";
+      state.apiToken = $("#apiTokenInput").value.trim();
+      localStorage.setItem("ri.apiToken", state.apiToken);
+      await loadProfiles();
+      $("#healthStatus").textContent = "Connected.";
+      toast("Connected.");
+      await refreshAll();
     } catch (error) {
       $("#healthStatus").textContent = error.message;
     }
