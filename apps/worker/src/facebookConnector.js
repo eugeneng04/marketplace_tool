@@ -175,6 +175,7 @@ export function detailToRawSourceItem(detail, card) {
 export function createFacebookGraphqlClient(options = {}) {
   return new FacebookGraphqlClient({
     facebookCookie: options.facebookCookie,
+    facebookMaxRequestsPerMinute: options.facebookMaxRequestsPerMinute,
     facebookUserAgent: options.facebookUserAgent,
     chromeProfile: options.chromeProfile || "Default"
   });
@@ -182,12 +183,14 @@ export function createFacebookGraphqlClient(options = {}) {
 
 export function createFacebookGraphqlConnector({
   facebookCookie,
+  facebookMaxRequestsPerMinute,
   facebookUserAgent,
   maxCardsPerRun,
   chromeProfile
 }) {
   const client = createFacebookGraphqlClient({
     facebookCookie,
+    facebookMaxRequestsPerMinute,
     facebookUserAgent,
     chromeProfile
   });
@@ -261,6 +264,7 @@ export function createFacebookConnector(options = {}) {
   const {
     mode = "mock",
     facebookCookie = "",
+    facebookMaxRequestsPerMinute,
     facebookUserAgent,
     maxCardsPerRun = 25,
     chromeProfile = "Default"
@@ -273,6 +277,7 @@ export function createFacebookConnector(options = {}) {
   if (mode === "facebook_graphql") {
     return createFacebookGraphqlConnector({
       facebookCookie,
+      facebookMaxRequestsPerMinute,
       facebookUserAgent,
       maxCardsPerRun,
       chromeProfile

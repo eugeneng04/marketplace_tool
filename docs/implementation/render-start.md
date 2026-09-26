@@ -35,6 +35,20 @@ Local development retains the internal scheduler by default.
 
 ## Free-tier operation and limitations
 
+- `FB_MAX_REQUESTS_PER_MINUTE` is enforced across all Facebook clients in one
+  worker process, including token-page, search, location, detail, and photo
+  requests. At the default 3 requests/minute, starts are at least 20 seconds
+  apart. Multiple worker processes do not share this in-memory limit.
+- Each full listing detail fetch uses two requests. A 15-listing import can
+  therefore take over 10 minutes; a 25-listing import can exceed 16 minutes.
+  The scheduled caller's nine-minute timeout may expire while the worker is
+  still running. Check run history before starting another run; reduce
+  `MAX_CARDS_PER_RUN` if shorter runs are required.
+- HTTP 429 pauses the shared queue for at least one minute and honors a longer
+  `Retry-After`. Rejected requests are not automatically retried. Run errors
+  retain bounded Facebook error codes/messages with session credentials and
+  links removed. Rate limiting cannot guarantee Facebook will accept access.
+
 - The workflow retries the read-only health request to allow Render to wake.
   It waits up to nine minutes for the search POST, without automatically retrying
   that POST. A timeout can leave work running on Render; check run history before

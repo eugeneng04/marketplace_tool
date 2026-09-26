@@ -1,3 +1,4 @@
+import { scheduleFacebookRequest } from "./facebookRequestLimiter.js";
 import crypto from "node:crypto";
 import { execFileSync, execSync } from "node:child_process";
 import os from "node:os";
@@ -531,6 +532,24 @@ export function parseListingImagesResponse(data) {
   return [...new Set(photos.map((photo) => photo?.image?.uri).filter(Boolean))];
 }
 
+export function formatFacebookError(data, session = {}) {
+  const errors = Array.isArray(data.errors) ? data.errors : [typeof data.error === "object" ? data.error : { code: data.error, message: data.errorDescription || data.errorSummary }];
+  const secrets = [session.cookieHeader, session.fbDtsg, session.lsd,
+    ...(session.cookieHeader || "").split(";").map(part => part.slice(part.indexOf("=") + 1).trim())]
+    .filter(Boolean).sort((a, b) => b.length - a.length);
+  const details = errors.slice(0, 3).map(error => {
+    const code = error?.code ?? error?.extensions?.code;
+    let message = typeof error?.message === "string" ? error.message : "";
+    for (const secret of secrets) message = message.split(secret).join("[redacted]");
+    message = message.replace(/https?:\/\/[^\s<>]+/gi, "[link removed]")
+      .replace(/(?:fb_dtsg|lsd|access_token|xs|c_user)\s*[=:]\s*[^\s;,]+/gi, "[credential redacted]")
+      .replace(/<[^>]*>/g, "").replace(/[\r\n\t]+/g, " ").slice(0, 300);
+    const safeCode = /^(?:[0-9]+|[A-Z_]{2,60})$/.test(String(code)) ? `code ${code}` : "";
+    return [safeCode, message].filter(Boolean).join(": ");
+  }).filter(Boolean).join("; ");
+  return `Facebook rejected the Marketplace request${details ? ` (${details})` : ""}.`;
+}
+
 export class FacebookGraphqlClient {
   constructor(options = {}) {
     this.cookieHeader = options.facebookCookie ?? "";
@@ -539,9 +558,26 @@ export class FacebookGraphqlClient {
     this.userAgent = options.facebookUserAgent ?? DEFAULT_USER_AGENT;
     this.session = null;
     this.reqCounter = 0;
+    this.requestsPerMinute = Number(options.facebookMaxRequestsPerMinute ?? process.env.FB_MAX_REQUESTS_PER_MINUTE ?? 3);
+    if (!Number.isFinite(this.requestsPerMinute) || this.requestsPerMinute <= 0) {
+      throw new Error("FB_MAX_REQUESTS_PER_MINUTE must be a positive number.");
+    }
+    this.scheduleRequest = options.scheduleRequest ?? scheduleFacebookRequest;
+  }
+
+  request(url, options) {
+    return this.scheduleRequest(() => fetch(url, { ...options, signal: AbortSignal.timeout(30000) }), this.requestsPerMinute);
   }
 
   async ensureSession() {
+    if (this.session) return this.session;
+    if (!this.sessionPromise) {
+      this.sessionPromise = this.loadSession().finally(() => { this.sessionPromise = null; });
+    }
+    return this.sessionPromise;
+  }
+
+  async loadSession() {
     if (this.session) {
       return this.session;
     }
@@ -569,7 +605,7 @@ export class FacebookGraphqlClient {
   }
 
   async extractTokens(cookieHeader) {
-    const response = await fetch(MARKETPLACE_URL, {
+    const response = await this.request(MARKETPLACE_URL, {
       headers: {
         ...BROWSER_HEADERS,
         "user-agent": this.userAgent,
@@ -625,7 +661,7 @@ export class FacebookGraphqlClient {
       __rev: session.clientRevision
     });
 
-    const response = await fetch(GRAPHQL_URL, {
+    const response = await this.request(GRAPHQL_URL, {
       method: "POST",
       headers: {
         ...BROWSER_HEADERS,
@@ -662,7 +698,7 @@ export class FacebookGraphqlClient {
       const data = JSON.parse(text);
       if (data.errors?.length || data.error) {
         this.session = null;
-        throw new Error("Facebook rejected the Marketplace query; no results were imported.");
+        throw new Error(formatFacebookError(data, session));
       }
       return data;
     } catch (error) {
