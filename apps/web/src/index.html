@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Resale Intelligence</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Primary navigation">
+        <div class="brand">
+          <div class="brand-mark">RI</div>
+          <div>
+            <h1>Resale Intelligence</h1>
+            <p>Marketplace vehicle console</p>
+          </div>
+        </div>
+        <nav class="nav-list">
+          <button class="nav-button is-active" data-view="dashboard" type="button">Deals</button>
+          <button class="nav-button" data-view="profiles" type="button">My Searches</button>
+          <button class="nav-button" data-view="listings" type="button">Listings</button>
+          <button class="nav-button" data-view="runs" type="button">Runs</button>
+          <button class="nav-button" data-view="generations" type="button">Car generations</button>
+        </nav>
+        <details class="connection-panel">
+          <summary id="connection-title">Worker connection</summary>
+          <label>
+            <span>Worker URL</span>
+            <input id="apiBaseInput" type="url" spellcheck="false" />
+          </label>
+          <label>
+            <span>Token</span>
+            <input id="apiTokenInput" type="password" autocomplete="off" />
+          </label>
+          <button id="healthButton" class="secondary-button" type="button">Check</button>
+          <p id="healthStatus" class="muted">Waiting for worker.</p>
+        </details>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Local marketplace cache</p>
+            <h2 id="viewTitle">Deals</h2>
+          </div>
+          <div class="topbar-actions">
+            <button id="syncAllButton" class="secondary-button" type="button">Run all saved</button>
+            <button id="refreshButton" class="primary-button" type="button">Refresh</button>
+          </div>
+        </header>
+
+        <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+        <section id="dashboardView" class="view is-visible">
+          <section class="panel deals-panel">
+            <div class="panel-header">
+              <div><h3>Deals for you</h3><p class="muted small">Ranked by score. Low-confidence listings are marked for review.</p></div>
+              <div class="deal-header-actions"><span id="dealsCount" class="pill">0</span><button class="text-button" data-view-jump="listings" type="button">All listings</button></div>
+            </div>
+            <div id="topDeals" class="listing-stack"></div>
+          </section>
+          <details class="panel alerts-drawer">
+            <summary><span>Search alerts</span><span id="alertsCount" class="pill">0</span></summary>
+            <p class="muted small">Alerts are listings that met one of your saved search rules. Mark them read here.</p>
+            <div id="dealAlerts" class="listing-stack"></div>
+          </details>
+        </section>
+
+        <section id="profilesView" class="view">
+          <details class="panel settings-drawer">
+            <summary>Default search area</summary>
+            <p class="muted small">New searches start here. You can override the area on an individual search.</p>
+            <form id="searchDefaultsForm" class="inline-fields">
+              <label><span>Start city or ZIP</span><input id="defaultLocationInput" required placeholder="Milpitas or 95035" /></label>
+              <label><span>Radius mi</span><input id="defaultRadiusInput" type="number" min="1" max="500" required /></label>
+              <button class="secondary-button" type="submit">Save defaults</button>
+            </form>
+          </details>
+          <details id="searchEditor" class="panel form-panel">
+              <summary id="searchEditorSummary">Add a search</summary>
+              <form id="profileForm">
+              <input id="profileIdInput" type="hidden" />
+              <label>
+                <span>What are you looking for?</span>
+                <input id="profileQueryInput" required placeholder="Civic Si, manual preferred" />
+              </label>
+              <label>
+                <span>Near city or ZIP code</span>
+                <input id="profileLocationInput" required placeholder="San Francisco or 94103" />
+              </label>
+              <div class="inline-fields">
+                <label>
+                  <span>Radius mi</span>
+                  <input id="profileRadiusInput" type="number" min="1" value="50" />
+                </label>
+                <label>
+                  <span>Min $</span>
+                  <input id="profileMinPriceInput" type="number" min="0" />
+                </label>
+                <label>
+                  <span>Max $</span>
+                  <input id="profileMaxPriceInput" type="number" min="0" />
+                </label>
+              </div>
+              <details class="filter-details">
+                <summary>More filters</summary>
+                <div class="inline-fields">
+                  <label><span>Transmission</span><select id="profileTransmissionInput"><option value="">Any</option><option value="manual">Manual</option><option value="automatic">Automatic</option></select></label>
+                  <label><span>Year from</span><input id="profileYearMinInput" type="number" min="1900" max="2100" placeholder="Any" /></label>
+                  <label><span>Year to</span><input id="profileYearMaxInput" type="number" min="1900" max="2100" placeholder="Any" /></label>
+                  <label><span>Max miles</span><input id="profileMaxMileageInput" type="number" min="0" step="1000" placeholder="Any" /></label>
+                </div>
+                <div class="inline-checks">
+                  <label class="checkbox-row"><input id="profileCleanTitleInput" type="checkbox" /><span>Clean title must be mentioned</span></label>
+                  <label class="checkbox-row"><input id="profileModifiedInput" type="checkbox" /><span>Has listed modifications</span></label>
+                </div>
+                <p class="muted small">These checks use details written in the listing. Unmentioned details can’t be verified.</p>
+              </details>
+              <details class="filter-details">
+                <summary>Alert criteria</summary>
+                <p class="muted small">Only completed searches create alerts for listings that meet all three limits.</p>
+                <div class="inline-fields">
+                  <label><span>Min deal score</span><input id="profileAlertScoreInput" type="number" min="0" max="100" value="70" /></label>
+                  <label><span>Min confidence</span><input id="profileAlertConfidenceInput" type="number" min="0" max="1" step="0.05" value="0.5" /></label>
+                  <label><span>Max listing age (hours)</span><input id="profileAlertAgeInput" type="number" min="1" value="72" /></label>
+                </div>
+              </details>
+              <label><span>Search group</span><select id="profileGroupInput"><option value="">No group</option></select></label>
+              <div class="inline-checks">
+                <label class="checkbox-row">
+                  <input id="profileEnabledInput" type="checkbox" checked />
+                  <span>Enabled</span>
+                </label>
+              </div>
+              <div class="inline-fields"><button class="secondary-button" type="submit">Save search</button><button class="primary-button" type="submit" data-run-now="true">Save &amp; run now</button></div>
+              </form>
+          </details>
+          <section class="panel">
+              <div class="panel-header">
+                <h3>Saved searches</h3>
+                <span id="profilesCount" class="pill">0</span>
+              </div>
+              <div id="profilesList" class="profile-list"></div>
+          </section>
+          <details class="panel groups-drawer"><summary>Search groups and schedules</summary>
+          <form id="groupForm" class="toolbar">
+            <div><h3>Create a search group</h3><p class="muted small">Give related searches a name, choose searches to include, and optionally set a schedule.</p></div>
+            <label><span>Group name</span><input id="groupNameInput" required placeholder="e.g. Subaru twins" /></label>
+            <label><span>Run automatically</span><select id="groupIntervalInput"><option value="0">No schedule</option><option value="60">Every hour</option><option value="180">Every 3 hours</option><option value="360">Every 6 hours</option><option value="720">Every 12 hours</option><option value="1440">Daily</option></select></label>
+            <fieldset><legend>Include saved searches</legend><div id="groupMembers" class="inline-checks"></div></fieldset>
+            <button class="secondary-button" type="submit">Create group</button>
+            <div id="groupsList" class="profile-list"></div>
+          </form>
+          </details>
+        </section>
+
+        <section id="listingsView" class="view">
+          <form id="listingFilters" class="toolbar">
+            <label class="toolbar-search">
+              <span>Search</span>
+              <input id="filterSearch" placeholder="civic si, Porsche 911..." />
+            </label>
+            <label>
+              <span>Status</span>
+              <select id="filterStatus">
+                <option value="">Any</option>
+                <option>new</option>
+                <option>watching</option>
+                <option>saved</option>
+                <option>contacted</option>
+                <option>rejected</option>
+                <option>sold</option>
+                <option>hidden</option>
+              </select>
+            </label>
+            <label>
+              <span>Sort</span>
+              <select id="filterSort">
+                <option value="newest">Newest</option>
+                <option value="oldest">Oldest</option>
+                <option value="price_asc">Price: low first</option>
+                <option value="price_desc">Price: high first</option>
+                <option value="score">Deal score</option>
+              </select>
+            </label>
+            <label>
+              <span>Make</span>
+              <input id="filterMake" placeholder="Honda" />
+            </label>
+            <label>
+              <span>Model</span>
+              <input id="filterModel" placeholder="Civic" />
+            </label>
+            <label>
+              <span>Transmission</span>
+              <select id="filterTransmission">
+                <option value="">Any</option>
+                <option>manual</option>
+                <option>automatic</option>
+              </select>
+            </label>
+            <label>
+              <span>Min $</span>
+              <input id="filterMinPrice" type="number" min="0" />
+            </label>
+            <label>
+              <span>Max $</span>
+              <input id="filterMaxPrice" type="number" min="0" />
+            </label>
+            <label>
+              <span>Min year</span>
+              <input id="filterYearMin" type="number" min="1900" max="2100" placeholder="2000" />
+            </label>
+            <label>
+              <span>Max year</span>
+              <input id="filterYearMax" type="number" min="1900" max="2100" placeholder="2025" />
+            </label>
+            <button class="secondary-button" type="submit">Apply</button>
+          </form>
+          <section class="panel table-panel">
+            <div class="panel-header">
+              <h3>Listings</h3>
+              <span id="listingsCount" class="pill">0</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Listing</th>
+                    <th>Price</th>
+                    <th>Vehicle</th>
+                    <th>Status</th>
+                    <th>Posted</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="listingsTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section id="runsView" class="view">
+          <section class="panel table-panel">
+            <div class="panel-header">
+              <h3>Runs</h3>
+              <button id="refreshRunsButton" class="text-button" type="button">Refresh</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Started</th>
+                    <th>Status</th>
+                    <th>Results</th>
+                    <th>New</th>
+                    <th>Existing</th>
+                    <th>Details</th>
+                    <th>Error</th>
+                  </tr>
+                </thead>
+                <tbody id="runsTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section id="generationsView" class="view">
+          <section class="panel form-panel generation-editor">
+            <h3>Car generations</h3>
+            <p class="muted small">Suggested generation ranges are ready to edit. Add your own codes and year ranges when a car community uses different names.</p>
+            <form id="generationForm">
+              <input id="generationIdInput" type="hidden" />
+              <div class="inline-fields">
+                <label><span>Make</span><input id="generationMakeInput" required placeholder="BMW" /></label>
+                <label><span>Model</span><input id="generationModelInput" required placeholder="M3" /></label>
+                <label><span>Generation</span><input id="generationCodeInput" required placeholder="E46" /></label>
+                <label><span>From year</span><input id="generationFromInput" type="number" min="1886" max="2100" required /></label>
+                <label><span>To year</span><input id="generationToInput" type="number" min="1886" max="2100" required /></label>
+              </div>
+              <div class="form-actions"><button id="generationSaveButton" class="primary-button" type="submit">Add generation</button><button id="generationCancelButton" class="secondary-button" type="button" hidden>Cancel edit</button></div>
+            </form>
+          </section>
+          <section class="panel">
+            <div class="panel-header"><div><h3>Generation catalog</h3><p class="muted small">These labels describe model-year ranges. They are editable reference data, not vehicle fitment certification.</p></div><span id="generationCount" class="pill">0</span></div>
+            <div id="vehicleGenerationsList" class="listing-stack"></div>
+          </section>
+        </section>
+      </main>
+
+      <aside id="detailPanel" class="detail-panel" aria-label="Listing detail" aria-hidden="true" inert>
+        <button id="detailCloseButton" class="detail-close" type="button" aria-label="Close listing details">×</button>
+        <div class="detail-empty">
+          <h2>Select a listing</h2>
+          <p>Details, description, photos, parse evidence, and price history appear here.</p>
+        </div>
+      </aside>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

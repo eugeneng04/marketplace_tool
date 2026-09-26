@@ -4,16 +4,20 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "node --check src/server.js && node --check src/db.js",
     "dev": "node src/server.js",
     "start": "node src/server.js",
     "migrate": "node src/cli.js migrate",
     "seed:demo": "node src/cli.js seed-demo",
     "sync:all": "node src/cli.js sync-all",
     "run:profile": "node src/cli.js run-profile",
-    "check": "node --check src/server.js && node --check src/cli.js"
+    "facebook:search": "node src/cli.js facebook-search",
+    "facebook:locations": "node src/cli.js facebook-locations",
+    "facebook:detail": "node src/cli.js facebook-detail",
+    "test": "node --test",
+    "check": "node --check src/server.js && node --check src/scheduler.js && node --check src/cli.js && node --check src/db.js && node --check src/syncEngine.js && node --check src/dealAlerts.js && node --check src/dealScoring.js && node --check src/comps.js && node --check src/auctionComps.js && node --check src/vehicleGenerations.js && node --check src/vehicleParser.js"
   },
   "dependencies": {
-    "cheerio": "^1.1.2",
     "pg": "^8.16.3"
   }
 }

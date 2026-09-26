@@ -11,6 +11,8 @@
   "scripts": {
     "build": "npm run --workspaces build",
     "check": "npm run --workspaces check",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
     "dev:web": "npm --workspace @resale-intelligence/web run dev",
     "dev:worker": "npm --workspace @resale-intelligence/worker run dev"
   }

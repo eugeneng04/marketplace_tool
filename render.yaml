@@ -1,37 +1,30 @@
 services:
   - type: web
-    name: resale-intelligence-api
+    name: resale-intelligence
     runtime: node
     plan: free
-    rootDir: apps/worker
     buildCommand: npm install
-    startCommand: npm start
+    startCommand: npm --workspace @resale-intelligence/worker start
+    healthCheckPath: /health
     autoDeploy: false
     envVars:
+      - key: NODE_VERSION
+        value: 22
       - key: NODE_ENV
         value: production
-      - key: CONNECTOR_MODE
-        value: mock
-      - key: DEFAULT_REGION
-        value: us-ca
-      - key: PREFER_MANUAL_TRANSMISSION
-        value: "true"
-      - key: MAX_CARDS_PER_RUN
-        value: "25"
-      - key: FB_USER_AGENT
-        value: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36
-      - key: FB_SEARCH_BASE_URL
-        value: https://www.facebook.com/marketplace/search/
-      - key: FB_COOKIE
-        sync: false
+      - key: SCHEDULER_ENABLED
+        value: "false"
+      - key: SCHEDULER_TOKEN
+        generateValue: true
       - key: API_TOKEN
         generateValue: true
       - key: DATABASE_URL
-        fromDatabase:
-          name: resale-intelligence-db
-          property: connectionString
-
-databases:
-  - name: resale-intelligence-db
-    plan: free
-    postgresMajorVersion: 16
+        sync: false
+      - key: CONNECTOR_MODE
+        value: facebook_graphql
+      - key: FB_COOKIE
+        sync: false
+      - key: FB_MAX_REQUESTS_PER_MINUTE
+        value: "3"
+      - key: MAX_CARDS_PER_RUN
+        value: "25"

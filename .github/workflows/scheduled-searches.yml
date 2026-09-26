@@ -1,0 +1,30 @@
+name: Scheduled searches
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: scheduled-searches
+  cancel-in-progress: false
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      APP_URL: ${{ secrets.RENDER_APP_URL }}
+      SCHEDULER_TOKEN: ${{ secrets.SCHEDULER_TOKEN }}
+    steps:
+      - name: Wake app and run due searches
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${APP_URL:?Set the RENDER_APP_URL repository secret}"
+          : "${SCHEDULER_TOKEN:?Set the SCHEDULER_TOKEN repository secret}"
+          [[ "$APP_URL" == https://* ]] || { echo 'APP_URL must use HTTPS'; exit 1; }
+          APP_URL="${APP_URL%/}"
+          # Retry only the read-only wake-up request, not the search POST.
+          curl --fail --silent --show-error --connect-timeout 20 --max-time 120 \
+            --retry 2 --retry-delay 10 --retry-max-time 300 "$APP_URL/health"
+          curl --fail-with-body --silent --show-error --connect-timeout 20 --max-time 540 \
+            -X POST -H "Authorization: Bearer $SCHEDULER_TOKEN" "$APP_URL/sync/due"

@@ -79,6 +79,9 @@ export function parseVehicleListing(rawItem) {
   const merged = `${rawItem.titleRaw ?? ""} ${rawItem.descriptionRaw ?? ""}`.toLowerCase();
   const evidence = [];
   const attributes = {};
+  if (rawItem.vehicleAttributes && typeof rawItem.vehicleAttributes === "object" && Object.keys(rawItem.vehicleAttributes).length) {
+    attributes.marketplaceAttributes = rawItem.vehicleAttributes;
+  }
 
   const yearMatch = merged.match(/\b(19\d{2}|20\d{2})\b/);
   if (yearMatch) {
@@ -105,19 +108,44 @@ export function parseVehicleListing(rawItem) {
   }
 
   const mileageMatch =
-    merged.match(/\b(\d{2,3})k\b/) ?? merged.match(/\b(\d{2,3})[,\s]?(\d{3})\s?(?:miles|mi)\b/);
+    merged.match(/\b(\d{2,3})[,\s]?(\d{3})[\s.,-]*(?:miles|mi)\b/) ??
+    merged.match(/\b(\d{4,6})[\s.,-]*(?:miles|mi)\b/) ??
+    merged.match(/\b(\d{1,3})k[\s.,-]*(?:miles|mi)\b/) ??
+    merged.match(/(?:mileage|odometer|\bodo\b|o\.d\.|on the clock|chassis)[^.\n]{0,30}?\b(\d[\d,]{3,6}\s*k?|\d{1,3}\s*k)\b/);
 
-  if (mileageMatch) {
-    if (mileageMatch[2]) {
-      attributes.mileage = Number.parseInt(`${mileageMatch[1]}${mileageMatch[2]}`, 10);
+  const structuredMileage = Number(rawItem.mileage ?? rawItem.vehicleMileage ?? rawItem.vehicleAttributes?.mileage ?? rawItem.vehicleAttributes?.vehicle_mileage);
+  if (Number.isFinite(structuredMileage) && structuredMileage >= 100 && structuredMileage <= 1_000_000) {
+    attributes.mileage = Math.round(structuredMileage);
+    addEvidence(evidence, "mileage", attributes.mileage, 0.95, "Marketplace vehicle mileage field");
+  } else if (mileageMatch) {
+    const lastGroup = mileageMatch[mileageMatch.length - 1];
+    let mileage;
+    if (mileageMatch[2] && /^\d{3}$/.test(mileageMatch[2])) {
+      // Precise "85,433 miles" form: first alternative matched.
+      mileage = Number.parseInt(`${mileageMatch[1]}${mileageMatch[2]}`, 10);
+    } else if (/k/i.test(mileageMatch[0]) && !/,/.test(lastGroup) && lastGroup.length <= 3) {
+      // Shorthand "81k miles" / "odo reads 80k".
+      mileage = Number.parseInt(lastGroup, 10) * 1000;
     } else {
-      attributes.mileage = Number.parseInt(mileageMatch[1], 10) * 1000;
+      mileage = Number.parseInt(`${lastGroup}`.replace(/,/g, ""), 10);
     }
 
-    addEvidence(evidence, "mileage", attributes.mileage, 0.75, mileageMatch[0]);
+    // Sanity range: real odometers live here; anything else is usually a
+    // price ("close to 30k"), year, or part number that slipped through.
+    if (Number.isFinite(mileage) && mileage >= 100 && mileage <= 1_000_000) {
+      attributes.mileage = mileage;
+      addEvidence(evidence, "mileage", attributes.mileage, 0.75, mileageMatch[0]);
+    }
   }
 
-  if (/(manual|stick shift|\b5 speed\b|\b6 speed\b|\b6spd\b|standard transmission|\bmt\b)/.test(merged)) {
+  const structuredTransmission = `${rawItem.vehicleAttributes?.transmission ?? ""}`.toLowerCase();
+  if (/manual|stick|standard/.test(structuredTransmission)) {
+    attributes.transmission = "manual";
+    addEvidence(evidence, "transmission", "manual", 0.95, "Marketplace transmission field");
+  } else if (/automatic|\bauto\b|cvt|dsg|pdk/.test(structuredTransmission)) {
+    attributes.transmission = "automatic";
+    addEvidence(evidence, "transmission", "automatic", 0.95, "Marketplace transmission field");
+  } else if (/(manual|stick shift|\b5 speed\b|\b6 speed\b|\b6spd\b|standard transmission|\bmt\b)/.test(merged)) {
     if (!/(manual windows|manual seats|manual locks|owner'?s manual)/.test(merged)) {
       attributes.transmission = "manual";
       addEvidence(evidence, "transmission", "manual", 0.8, "manual keyword");

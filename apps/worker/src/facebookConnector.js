@@ -1,8 +1,6 @@
 import { createHash } from "node:crypto";
-import * as cheerio from "cheerio";
+import { FacebookGraphqlClient } from "./facebookGraphqlClient.js";
 import { normalizeUrl } from "./utils.js";
-
-const FACEBOOK_ORIGIN = "https://www.facebook.com";
 
 function hashText(input) {
   return createHash("sha1").update(input).digest("hex").slice(0, 12);
@@ -11,58 +9,6 @@ function hashText(input) {
 function extractSourceItemId(url) {
   const match = url.match(/\/marketplace\/item\/([A-Za-z0-9._-]+)/);
   return match?.[1] ?? undefined;
-}
-
-function normalizeText(value) {
-  return (value ?? "").replace(/\s+/g, " ").trim();
-}
-
-function extractPriceFromText(text) {
-  const match = text.match(/\$\s?\d[\d,]*/);
-  return match ? match[0].replace(/\s+/g, "") : undefined;
-}
-
-function inferTitleFromText(text, fallbackId) {
-  const compact = normalizeText(text);
-  if (!compact) {
-    return `Marketplace listing ${fallbackId ?? "unknown"}`;
-  }
-
-  const withoutPrice = compact.replace(/\$\s?\d[\d,]*/g, "").trim();
-  if (!withoutPrice) {
-    return `Marketplace listing ${fallbackId ?? "unknown"}`;
-  }
-
-  const words = withoutPrice.split(" ").filter(Boolean);
-  return words.slice(0, 18).join(" ");
-}
-
-function buildSearchUrl(profile, searchBaseUrl) {
-  const profileSearchUrl = profile?.filtersJson?.searchUrl;
-  if (typeof profileSearchUrl === "string" && profileSearchUrl.startsWith("http")) {
-    return profileSearchUrl;
-  }
-
-  const url = new URL(searchBaseUrl);
-  url.searchParams.set("query", profile.query);
-
-  if (profile.minPrice !== null && profile.minPrice !== undefined) {
-    url.searchParams.set("minPrice", `${profile.minPrice}`);
-  }
-
-  if (profile.maxPrice !== null && profile.maxPrice !== undefined) {
-    url.searchParams.set("maxPrice", `${profile.maxPrice}`);
-  }
-
-  if (profile.radiusMiles !== null && profile.radiusMiles !== undefined) {
-    url.searchParams.set("radius", `${profile.radiusMiles}`);
-  }
-
-  if (profile.location && !url.searchParams.has("location")) {
-    url.searchParams.set("location", profile.location);
-  }
-
-  return url.toString();
 }
 
 function createMockCard(profile, rank) {
@@ -101,121 +47,6 @@ function createMockCard(profile, rank) {
     priceRaw: `$${price.toLocaleString("en-US")}`,
     locationRaw: profile.location,
     thumbnailUrl: `https://picsum.photos/seed/${sourceItemId}/640/480`
-  };
-}
-
-async function fetchHtml(url, headers) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20_000);
-
-  try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers,
-      redirect: "follow",
-      signal: controller.signal
-    });
-
-    if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      const compactBody = normalizeText(body).slice(0, 180);
-      const bodyHint = compactBody ? ` :: ${compactBody}` : "";
-      throw new Error(`HTTP ${response.status} while fetching ${url}${bodyHint}`);
-    }
-
-    return await response.text();
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function parseCardsFromSearchHtml(html, maxCards = 25) {
-  const $ = cheerio.load(html);
-  const cards = [];
-  const seen = new Set();
-
-  $("a[href*='/marketplace/item/']").each((_, element) => {
-    if (cards.length >= maxCards) {
-      return;
-    }
-
-    const href = $(element).attr("href");
-    if (!href) {
-      return;
-    }
-
-    const absoluteUrl = href.startsWith("http") ? href : new URL(href, FACEBOOK_ORIGIN).toString();
-    const normalized = normalizeUrl(absoluteUrl);
-    if (seen.has(normalized)) {
-      return;
-    }
-
-    seen.add(normalized);
-
-    const sourceItemId = extractSourceItemId(absoluteUrl);
-
-    const cardContainer =
-      $(element).closest("article").first().length > 0
-        ? $(element).closest("article").first()
-        : $(element).closest("li, div").first();
-
-    const blockText = normalizeText(cardContainer.text() || $(element).text());
-
-    cards.push({
-      rank: cards.length + 1,
-      sourceItemId,
-      listingUrl: absoluteUrl,
-      titleRaw: inferTitleFromText(blockText, sourceItemId),
-      priceRaw: extractPriceFromText(blockText),
-      locationRaw: undefined,
-      thumbnailUrl: undefined,
-      rawCardText: blockText
-    });
-  });
-
-  return cards;
-}
-
-function extractDetailFromHtml(url, html) {
-  if (/log into facebook|you must log in/i.test(html)) {
-    throw new Error("Facebook session appears invalid or logged out. Refresh FB_COOKIE.");
-  }
-
-  const $ = cheerio.load(html);
-
-  const ogTitle = normalizeText($("meta[property='og:title']").attr("content"));
-  const ogDescription = normalizeText($("meta[property='og:description']").attr("content"));
-
-  const ogImages = [];
-  $("meta[property='og:image']").each((_, node) => {
-    const value = normalizeText($(node).attr("content"));
-    if (value) {
-      ogImages.push(value);
-    }
-  });
-
-  const pageText = normalizeText($("body").text());
-
-  const titleRaw = ogTitle || inferTitleFromText(pageText, extractSourceItemId(url));
-  const descriptionRaw = ogDescription || pageText.slice(0, 1_500);
-  const priceRaw = extractPriceFromText(pageText);
-
-  return {
-    source: "facebook_marketplace",
-    sourceItemId: extractSourceItemId(url),
-    url,
-    normalizedUrl: normalizeUrl(url),
-    titleRaw,
-    priceRaw,
-    descriptionRaw,
-    locationRaw: undefined,
-    imageUrls: ogImages,
-    sellerRaw: undefined,
-    capturedAt: new Date(),
-    sourceMetadata: {
-      captureMode: "facebook_html",
-      rawLength: html.length
-    }
   };
 }
 
@@ -274,68 +105,134 @@ function createMockConnector(mode, maxCards) {
   };
 }
 
-function createFacebookHtmlConnector({ facebookCookie, facebookUserAgent, facebookSearchBaseUrl, maxCardsPerRun }) {
-  const baseHeaders = {
-    "user-agent": facebookUserAgent,
-    accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "accept-language": "en-US,en;q=0.9",
-    "cache-control": "max-age=0",
-    cookie: facebookCookie
+function radiusMilesToKm(radiusMiles) {
+  return Math.max(1, Math.round((radiusMiles ?? 25) * 1.60934));
+}
+
+function readProfileCoordinates(profile) {
+  const filters = profile.filtersJson ?? {};
+  const latitude = Number.parseFloat(`${filters.latitude ?? filters.lat ?? ""}`);
+  const longitude = Number.parseFloat(`${filters.longitude ?? filters.lng ?? filters.lon ?? ""}`);
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    throw new Error(
+      "facebook_graphql requires profile.filtersJson.latitude and profile.filtersJson.longitude. Use /facebook/locations to find coordinates."
+    );
+  }
+
+  return { latitude, longitude };
+}
+
+function listingToCard(listing, rank) {
+  return {
+    rank,
+    sourceItemId: listing.id,
+    listingUrl: listing.url,
+    titleRaw: listing.title,
+    priceRaw: listing.price,
+    locationRaw: listing.location,
+    thumbnailUrl: listing.imageUrl,
+    rawCardText: [listing.title, listing.price, listing.location, listing.sellerName].filter(Boolean).join(" "),
+    sourceMetadata: {
+      captureMode: "facebook_graphql",
+      postedDate: listing.postedDate,
+      isPending: listing.isPending,
+      sellerName: listing.sellerName,
+      raw: listing.raw
+    }
   };
+}
+
+export function detailToRawSourceItem(detail, card) {
+  const sourceItemId = detail.id || card?.sourceItemId || extractSourceItemId(detail.url ?? card?.listingUrl ?? "");
+  const url = detail.url || card?.listingUrl || `https://www.facebook.com/marketplace/item/${sourceItemId}/`;
+  const cardTitle = card?.titleRaw && !/^Marketplace listing(?:\s|$)/i.test(card.titleRaw) ? card.titleRaw : "";
 
   return {
+    source: "facebook_marketplace",
+    sourceItemId,
+    url,
+    normalizedUrl: normalizeUrl(url),
+    titleRaw: detail.title || cardTitle || `Marketplace listing ${sourceItemId ?? "unknown"}`,
+    descriptionRaw: detail.description || card?.rawCardText || undefined,
+    priceRaw: detail.price || card?.priceRaw || undefined,
+    locationRaw: detail.location || card?.locationRaw || undefined,
+    imageUrls: detail.images?.length ? detail.images : [detail.imageUrl || card?.thumbnailUrl].filter(Boolean),
+    sellerRaw: detail.seller?.name || detail.sellerName || card?.sourceMetadata?.sellerName || undefined,
+    mileage: detail.mileage ?? undefined,
+    vehicleAttributes: detail.vehicleAttributes ?? {},
+    capturedAt: new Date(),
+    sourceMetadata: {
+      captureMode: "facebook_graphql",
+      condition: detail.condition || undefined,
+      isPending: detail.isPending ?? card?.sourceMetadata?.isPending,
+      isSold: detail.isSold ?? undefined,
+      postedDate: detail.postedDate || card?.sourceMetadata?.postedDate || undefined
+    }
+  };
+}
+
+export function createFacebookGraphqlClient(options = {}) {
+  return new FacebookGraphqlClient({
+    facebookCookie: options.facebookCookie,
+    facebookUserAgent: options.facebookUserAgent,
+    chromeProfile: options.chromeProfile || "Default"
+  });
+}
+
+export function createFacebookGraphqlConnector({
+  facebookCookie,
+  facebookUserAgent,
+  maxCardsPerRun,
+  chromeProfile
+}) {
+  const client = createFacebookGraphqlClient({
+    facebookCookie,
+    facebookUserAgent,
+    chromeProfile
+  });
+
+  return {
+    client,
+
     async captureListingCards(profile) {
-      const searchUrl = buildSearchUrl(profile, facebookSearchBaseUrl);
-      const html = await fetchHtml(searchUrl, {
-        ...baseHeaders,
-        "sec-fetch-dest": "document",
-        "sec-fetch-mode": "navigate",
-        "sec-fetch-site": "none",
-        "sec-fetch-user": "?1",
-        "upgrade-insecure-requests": "1"
+      const { latitude, longitude } = readProfileCoordinates(profile);
+      const radiusKm = Number.parseInt(`${profile.filtersJson?.radiusKm ?? radiusMilesToKm(profile.radiusMiles)}`, 10);
+      const result = await client.searchListings({
+        query: profile.query,
+        latitude,
+        longitude,
+        radiusKm,
+        newestWithinDays: profile.filtersJson?.newestWithinDays ?? 1,
+        minPrice: profile.minPrice ?? undefined,
+        maxPrice: profile.maxPrice ?? undefined,
+        category: profile.filtersJson?.facebookCategoryId,
+        limit: maxCardsPerRun
       });
-      if (/log into facebook|you must log in/i.test(html)) {
-        throw new Error("Facebook session appears invalid or logged out. Refresh FB_COOKIE.");
-      }
-      const cards = parseCardsFromSearchHtml(html, maxCardsPerRun);
-      if (cards.length === 0) {
-        throw new Error("No listing cards found in search HTML. Update profile URL or parser selectors.");
-      }
 
       return {
-        cards,
+        cards: result.listings.map((listing, index) => listingToCard(listing, index + 1)),
         capturedAt: new Date(),
         sourceMetadata: {
-          mode: "facebook_html",
-          searchUrl,
-          cardCount: cards.length
+          mode: "facebook_graphql",
+          query: profile.query,
+          latitude,
+          longitude,
+          radiusKm,
+          hasNextPage: result.hasNextPage,
+          endCursor: result.endCursor,
+          diagnostics: result.diagnostics
         }
       };
     },
 
     async fetchListingDetail(card) {
-      const html = await fetchHtml(card.listingUrl, {
-        ...baseHeaders,
-        "sec-fetch-dest": "document",
-        "sec-fetch-mode": "navigate",
-        "sec-fetch-site": "same-origin",
-        "upgrade-insecure-requests": "1",
-        referer: "https://www.facebook.com/marketplace/"
-      });
-      const detail = extractDetailFromHtml(card.listingUrl, html);
-
-      // Keep better card-level values when detail parsing is weak.
-      if (!detail.priceRaw && card.priceRaw) {
-        detail.priceRaw = card.priceRaw;
+      const listingId = card.sourceItemId ?? extractSourceItemId(card.listingUrl);
+      if (!listingId) {
+        return this.normalizeCardToRawSourceItem(card);
       }
-      if ((!detail.titleRaw || detail.titleRaw.startsWith("Marketplace listing")) && card.titleRaw) {
-        detail.titleRaw = card.titleRaw;
-      }
-      if (!detail.locationRaw && card.locationRaw) {
-        detail.locationRaw = card.locationRaw;
-      }
-
-      return detail;
+      const detail = await client.getListingDetail(listingId);
+      return detailToRawSourceItem(detail, card);
     },
 
     normalizeCardToRawSourceItem(card, capturedAt = new Date()) {
@@ -349,10 +246,11 @@ function createFacebookHtmlConnector({ facebookCookie, facebookUserAgent, facebo
         priceRaw: card.priceRaw,
         locationRaw: card.locationRaw,
         imageUrls: [card.thumbnailUrl].filter(Boolean),
-        sellerRaw: undefined,
+        sellerRaw: card.sourceMetadata?.sellerName,
         capturedAt,
         sourceMetadata: {
-          captureMode: "facebook_html"
+          ...(card.sourceMetadata ?? {}),
+          captureMode: "facebook_graphql"
         }
       };
     }
@@ -364,22 +262,22 @@ export function createFacebookConnector(options = {}) {
     mode = "mock",
     facebookCookie = "",
     facebookUserAgent,
-    facebookSearchBaseUrl,
-    maxCardsPerRun = 25
+    maxCardsPerRun = 25,
+    chromeProfile = "Default"
   } = options;
 
   if (mode === "mock") {
     return createMockConnector(mode, maxCardsPerRun);
   }
 
-  if (mode === "facebook_html") {
-    return createFacebookHtmlConnector({
+  if (mode === "facebook_graphql") {
+    return createFacebookGraphqlConnector({
       facebookCookie,
       facebookUserAgent,
-      facebookSearchBaseUrl,
-      maxCardsPerRun
+      maxCardsPerRun,
+      chromeProfile
     });
   }
 
-  throw new Error(`Unsupported CONNECTOR_MODE: ${mode}. Supported: \"mock\", \"facebook_html\".`);
+  throw new Error(`Unsupported CONNECTOR_MODE: ${mode}. Supported: "mock", "facebook_graphql".`);
 }

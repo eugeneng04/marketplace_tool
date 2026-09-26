@@ -1,0 +1,695 @@
+import crypto from "node:crypto";
+import { execFileSync, execSync } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
+
+const GRAPHQL_URL = "https://www.facebook.com/api/graphql/";
+const MARKETPLACE_URL = "https://www.facebook.com/marketplace/";
+const MARKETPLACE_SEARCH_DOC_ID = "7111939778879383";
+const LOCATION_SEARCH_DOC_ID = "5585904654783609";
+const LISTING_DETAIL_DOC_ID = "26924013917190310";
+const LISTING_PHOTOS_DOC_ID = "10059604367394414";
+const DEFAULT_NEWEST_WITHIN_DAYS = 1;
+const CHROME_SALT = "saltysalt";
+const CHROME_ITERATIONS = 1003;
+const CHROME_KEY_LENGTH = 16;
+const CHROME_IV = Buffer.alloc(16, " ");
+
+const DEFAULT_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36";
+
+const BROWSER_HEADERS = {
+  "accept-language": "en-US,en;q=0.9",
+  "sec-ch-ua": '"Chromium";v="150", "Google Chrome";v="150", "Not?A_Brand";v="99"',
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": '"macOS"'
+};
+
+function getChromePassword() {
+  try {
+    return execSync('security find-generic-password -w -s "Chrome Safe Storage" -a "Chrome"', {
+      stdio: ["pipe", "pipe", "pipe"]
+    })
+      .toString()
+      .trim();
+  } catch {
+    throw new Error("Could not read Chrome Safe Storage from macOS Keychain.");
+  }
+}
+
+function deriveChromeKey(password) {
+  return crypto.pbkdf2Sync(password, CHROME_SALT, CHROME_ITERATIONS, CHROME_KEY_LENGTH, "sha1");
+}
+
+function decryptCookieValue(encrypted, key) {
+  if (!encrypted || encrypted.length === 0) {
+    return "";
+  }
+
+  if (encrypted.slice(0, 3).toString("ascii") !== "v10") {
+    return encrypted.toString("utf8");
+  }
+
+  const decipher = crypto.createDecipheriv("aes-128-cbc", key, CHROME_IV);
+  decipher.setAutoPadding(false);
+
+  let decoded = Buffer.concat([decipher.update(encrypted.slice(3)), decipher.final()]);
+  const padding = decoded[decoded.length - 1];
+  if (padding && padding > 0 && padding <= 16) {
+    decoded = decoded.slice(0, decoded.length - padding);
+  }
+
+  if (decoded.length > 32) {
+    decoded = decoded.slice(32);
+  }
+
+  return decoded.toString("utf8");
+}
+
+function getChromeCookieDbPath(profile) {
+  return path.join(os.homedir(), "Library/Application Support/Google/Chrome", profile, "Cookies");
+}
+
+async function extractChromeCookies(domain, profile) {
+  const cookiePath = getChromeCookieDbPath(profile);
+  const tmpPath = path.join(os.tmpdir(), `resale_intelligence_chrome_cookies_${process.pid}_${Date.now()}`);
+
+  try {
+    execSync(`cp "${cookiePath}" "${tmpPath}"`, { stdio: ["pipe", "pipe", "pipe"] });
+  } catch {
+    throw new Error(`Could not copy Chrome cookies from ${cookiePath}. Check CHROME_PROFILE and Chrome login state.`);
+  }
+
+  const key = deriveChromeKey(getChromePassword());
+
+  try {
+    const rows = JSON.parse(
+      execFileSync(
+        "sqlite3",
+        [
+          "-json",
+          tmpPath,
+          `SELECT host_key, name, value, hex(encrypted_value) AS encrypted_value_hex, path, expires_utc, is_secure, is_httponly
+           FROM cookies
+           WHERE host_key LIKE '%${domain.replace(/'/g, "''")}';`
+        ],
+        { encoding: "utf8" }
+      )
+    );
+
+    return rows.map((row) => {
+      let value = row.value;
+      const encryptedValue = row.encrypted_value_hex ? Buffer.from(row.encrypted_value_hex, "hex") : null;
+      if (!value && encryptedValue?.length > 0) {
+        value = decryptCookieValue(encryptedValue, key);
+      }
+
+      return {
+        host: row.host_key,
+        name: row.name,
+        value,
+        path: row.path,
+        expires: row.expires_utc,
+        secure: Boolean(row.is_secure),
+        httpOnly: Boolean(row.is_httponly)
+      };
+    });
+  } finally {
+    try {
+      execSync(`rm -f "${tmpPath}"`, { stdio: ["pipe", "pipe", "pipe"] });
+    } catch {
+      // Non-fatal cleanup failure.
+    }
+  }
+}
+
+function cookiesToHeader(cookies) {
+  return cookies.map((cookie) => `${cookie.name}=${cookie.value.replace(/[^\x00-\xFF]/g, "")}`).join("; ");
+}
+
+function getCookieValue(cookies, name) {
+  return cookies.find((cookie) => cookie.name === name)?.value;
+}
+
+function parseCookieHeader(cookieHeader) {
+  return cookieHeader
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const separator = part.indexOf("=");
+      return {
+        name: separator >= 0 ? part.slice(0, separator) : part,
+        value: separator >= 0 ? part.slice(separator + 1) : ""
+      };
+    });
+}
+
+export function buildSearchVariables(params) {
+  const variables = {
+    count: params.limit,
+    params: {
+      bqf: {
+        callsite: "COMMERCE_MKTPLACE_WWW",
+        query: params.query
+      },
+      browse_request_params: {
+        commerce_enable_local_pickup: true,
+        commerce_enable_shipping: true,
+        commerce_search_and_rp_available: true,
+        commerce_search_and_rp_condition: null,
+        commerce_search_and_rp_ctime_days: params.newestWithinDays ?? DEFAULT_NEWEST_WITHIN_DAYS,
+        filter_location_latitude: params.latitude,
+        filter_location_longitude: params.longitude,
+        filter_price_lower_bound: params.minPrice ? params.minPrice * 100 : 0,
+        filter_price_upper_bound: params.maxPrice ? params.maxPrice * 100 : 214748364700,
+        filter_radius_km: params.radiusKm,
+        sort_by: "creation_time_descend"
+      },
+      custom_request_params: {
+        surface: "SEARCH"
+      }
+    }
+  };
+
+  if (params.cursor) {
+    variables.cursor = params.cursor;
+  }
+
+  if (params.category) {
+    variables.params.browse_request_params.commerce_search_and_rp_category_id = params.category;
+  }
+
+  return variables;
+}
+
+function buildLocationSearchVariables(query) {
+  return {
+    params: {
+      caller: "MARKETPLACE",
+      page_category: ["CITY", "SUBCITY", "NEIGHBORHOOD"],
+      query
+    }
+  };
+}
+
+export function parseSearchResponse(data, limit = 25) {
+  const feedUnits = data?.data?.marketplace_search?.feed_units;
+  const edges = feedUnits?.edges ?? [];
+  const pageInfo = feedUnits?.page_info ?? {};
+  const seen = new Set();
+  const listingObjects = [];
+
+  function visit(value) {
+    if (!value || typeof value !== "object") {
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+
+    const id = value.id ?? value.listing_id ?? value.marketplace_listing_id;
+    const title = value.marketplace_listing_title ?? value.title;
+    if (id && typeof title === "string" && title.trim() && !seen.has(`${id}`)) {
+      seen.add(`${id}`);
+      listingObjects.push(value);
+    }
+
+    for (const child of Object.values(value)) visit(child);
+  }
+
+  for (const edge of edges) visit(edge?.node);
+
+  // Recent Marketplace responses can expose listing IDs in the pagination cursor
+  // while returning only feed-unit wrapper nodes in the edge list.
+  if (pageInfo.end_cursor) {
+    try {
+      const cursor = JSON.parse(pageInfo.end_cursor);
+      const cursorListingIds = cursor?.c2c?.sspi ?? cursor?.sspi ?? [];
+      for (const id of cursorListingIds) {
+        if (!id || seen.has(`${id}`)) continue;
+        seen.add(`${id}`);
+        listingObjects.push({ id: `${id}`, marketplace_listing_title: "Marketplace listing" });
+      }
+    } catch {
+      // Facebook may change the cursor encoding; parsed feed nodes remain usable.
+    }
+  }
+
+  const listings = listingObjects.slice(0, Math.max(0, limit)).map((listing) => {
+    const id = `${listing.id ?? listing.listing_id ?? listing.marketplace_listing_id}`;
+    return {
+      id,
+      title: listing.marketplace_listing_title ?? listing.title ?? "",
+      price: listing.listing_price?.formatted_amount ?? listing.listing_price?.amount ?? listing.price?.formatted_amount ?? listing.price?.amount ?? "",
+      location:
+        listing.location?.reverse_geocode?.city_page?.display_name ??
+        listing.location?.reverse_geocode?.city ??
+        listing.location?.name ??
+        "",
+      imageUrl: listing.primary_listing_photo?.image?.uri ?? listing.image?.uri ?? "",
+      sellerName: listing.marketplace_listing_seller?.name ?? "",
+      postedDate: listing.creation_time ? new Date(listing.creation_time * 1000).toISOString() : "",
+      url: `https://www.facebook.com/marketplace/item/${id}/`,
+      isPending: listing.is_pending ?? false,
+      raw: listing
+    };
+  });
+
+  const firstNode = edges[0]?.node;
+  const diagnostics = listings.length
+    ? undefined
+    : {
+        graphqlDataKeys: Object.keys(data?.data ?? {}),
+        feedUnitKeys: Object.keys(feedUnits ?? {}),
+        edgeCount: edges.length,
+        firstNodeKeys: Object.keys(firstNode ?? {}),
+        hasNextPage: pageInfo.has_next_page ?? false
+      };
+
+  return {
+    listings,
+    hasNextPage: pageInfo.has_next_page ?? false,
+    endCursor: pageInfo.end_cursor ?? null,
+    ...(diagnostics ? { diagnostics } : {})
+  };
+}
+
+function decodeHtmlEntities(value) {
+  return `${value ?? ""}`
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/&#39;/g, "'");
+}
+
+function decodeJsonString(value) {
+  if (!value) {
+    return "";
+  }
+
+  try {
+    return JSON.parse(`"${value.replace(/"/g, '\\"')}"`);
+  } catch {
+    return value.replace(/\\\//g, "/").replace(/\\"/g, '"');
+  }
+}
+
+function firstJsonStringMatch(html, patterns) {
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match?.[1]) {
+      return decodeJsonString(match[1]);
+    }
+  }
+
+  return "";
+}
+
+export function parseListingDetailFromPage(html, listingId) {
+  const title =
+    firstJsonStringMatch(html, [/"marketplace_listing_title"\s*:\s*"((?:\\"|[^"])*)"/]) ||
+    decodeHtmlEntities(html.match(/<meta\s+property="og:title"\s+content="([^"]*)"/)?.[1] ?? "");
+
+  const description =
+    firstJsonStringMatch(html, [
+      /"redacted_description"\s*:\s*\{\s*"text"\s*:\s*"((?:\\"|[^"])*)"/,
+      /"listing_description"\s*:\s*\{\s*"text"\s*:\s*"((?:\\"|[^"])*)"/,
+      /"description"\s*:\s*\{\s*"text"\s*:\s*"((?:\\"|[^"])*)"/
+    ]) || decodeHtmlEntities(html.match(/<meta\s+property="og:description"\s+content="([^"]*)"/)?.[1] ?? "");
+
+  const imageUrl =
+    firstJsonStringMatch(html, [
+      /"primary_listing_photo"[\s\S]{0,600}?"image"\s*:\s*\{[\s\S]{0,200}?"uri"\s*:\s*"((?:\\"|[^"])*)"/,
+      /"primary_listing_photo"[\s\S]{0,600}?"uri"\s*:\s*"((?:\\"|[^"])*)"/
+    ]) || decodeHtmlEntities(html.match(/<meta\s+property="og:image"\s+content="([^"]*)"/)?.[1] ?? "");
+
+  // Do not scan the entire HTML document for image URIs: Facebook includes
+  // seller avatars and recommendations alongside the listing's own photos.
+  const images = imageUrl ? [imageUrl] : [];
+
+  const price =
+    firstJsonStringMatch(html, [
+      /"formatted_price"\s*:\s*\{\s*"text"\s*:\s*"((?:\\"|[^"])*)"/,
+      /"formatted_amount"\s*:\s*"((?:\\"|[^"])*)"/,
+      /"price"\s*:\s*"((?:\\"|[^"])*)"/,
+      /\\"amount\\"\s*:\s*\\"([^"]+)\\"/
+    ]) ||
+    "";
+
+  const sellerName = firstJsonStringMatch(html, [/"marketplace_listing_seller"[\s\S]{0,900}?"name"\s*:\s*"((?:\\"|[^"])*)"/]);
+  const condition = firstJsonStringMatch(html, [/"condition_text"\s*:\s*"((?:\\"|[^"])*)"/, /"condition"\s*:\s*"((?:\\"|[^"])*)"/]);
+  const location =
+    firstJsonStringMatch(html, [
+      /"location_text"\s*:\s*\{[^}]*"text"\s*:\s*"((?:\\"|[^"])*)"/,
+      /"reverse_geocode_city"\s*:\s*"((?:\\"|[^"])*)"/
+    ]) ||
+    "";
+
+  return {
+    id: listingId,
+    title,
+    description,
+    price,
+    location,
+    imageUrl,
+    images,
+    sellerName,
+    postedDate: "",
+    url: `https://www.facebook.com/marketplace/item/${listingId}/`,
+    isPending: false,
+    condition,
+    seller: {
+      name: sellerName,
+      profileUrl: ""
+    }
+  };
+}
+
+const LISTING_DETAIL_VARIABLE_DEFAULTS = {
+  enableJobEmployerActionBar: false,
+  enableJobSeekerActionBar: false,
+  feedbackSource: 56,
+  feedLocation: "MARKETPLACE_MEGAMALL",
+  referralCode: "null",
+  referralSurfaceString: "search",
+  scale: 1,
+  useDefaultActor: false,
+  __relay_internal__pv__ShouldUpdateMarketplaceBoostListingBoostedStatusrelayprovider: false,
+  __relay_internal__pv__CometUFISingleLineUFIrelayprovider: false,
+  __relay_internal__pv__CometUFIShareActionMigrationrelayprovider: true,
+  __relay_internal__pv__CometUFIReactionsEnableShortNamerelayprovider: false,
+  __relay_internal__pv__CometUFICommentAutoTranslationTyperelayprovider: "ORIGINAL",
+  __relay_internal__pv__CometUFICommentAvatarStickerAnimatedImagerelayprovider: false,
+  __relay_internal__pv__CometUFICommentActionLinksRewriteEnabledrelayprovider: false,
+  __relay_internal__pv__IsWorkUserrelayprovider: false,
+  __relay_internal__pv__GHLShouldChangeSponsoredDataFieldNamerelayprovider: false,
+  __relay_internal__pv__GHLShouldChangeAdIdFieldNamerelayprovider: false,
+  __relay_internal__pv__CometUFI_dedicated_comment_routable_dialog_gkrelayprovider: true
+};
+
+export function buildListingDetailVariables(listingId) {
+  return { ...LISTING_DETAIL_VARIABLE_DEFAULTS, targetId: `${listingId}` };
+}
+
+export function parseListingDetailResponse(data, listingId) {
+  const target = data?.data?.viewer?.marketplace_product_details_page?.target;
+  if (!target) throw new Error(`Facebook GraphQL returned no detail data for listing ${listingId}.`);
+
+  const primaryImage = target.primary_listing_photo?.image?.uri ?? "";
+  const images = [...new Set([primaryImage, ...(target.listing_photos ?? []).map((photo) => photo?.image?.uri)].filter(Boolean))];
+  const createdAt = Number(target.creation_time);
+  const sellerName = target.marketplace_listing_seller?.name ?? "";
+  const vehicleAttributes = extractMarketplaceVehicleAttributes(target);
+  const mileage = vehicleAttributes.mileage ?? extractMarketplaceMileage(target);
+
+  return {
+    id: `${target.id ?? listingId}`,
+    title: target.marketplace_listing_title ?? "",
+    description: target.redacted_description?.text ?? "",
+    price: target.listing_price?.formatted_amount ?? target.listing_price?.amount ?? "",
+    location: target.location_text?.text ?? target.location?.reverse_geocode?.city_page?.display_name ?? "",
+    imageUrl: primaryImage || images[0] || "",
+    images,
+    sellerName,
+    postedDate: Number.isFinite(createdAt) && createdAt > 0 ? new Date(createdAt * 1000).toISOString() : "",
+    url: target.share_uri ?? `https://www.facebook.com/marketplace/item/${listingId}/`,
+    isPending: target.is_pending ?? false,
+    isSold: target.is_sold ?? false,
+    condition: (target.attribute_data ?? []).find((attribute) => /condition/i.test(attribute?.attribute_name ?? ""))?.label ?? "",
+    mileage,
+    vehicleAttributes,
+    seller: { name: sellerName, profileUrl: "" },
+    raw: target
+  };
+}
+
+function attributeText(value) {
+  if (typeof value === "string" || typeof value === "number") return `${value}`.trim();
+  if (!value || typeof value !== "object") return "";
+  for (const key of ["formatted_value", "display_value", "value", "label", "text", "attribute_value"]) {
+    const text = attributeText(value[key]);
+    if (text) return text;
+  }
+  return "";
+}
+
+function extractMarketplaceVehicleAttributes(target) {
+  const result = {};
+  const put = (name, value) => {
+    const key = `${name ?? ""}`.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+    const text = attributeText(value);
+    if (key && text) result[key] = text;
+  };
+  for (const entry of target?.attribute_data ?? []) {
+    put(entry?.attribute_name ?? entry?.name ?? entry?.key, entry?.attribute_value ?? entry?.value ?? entry?.label ?? entry?.formatted_value);
+  }
+  const seen = new Set();
+  const visit = (node) => {
+    if (!node || typeof node !== "object" || seen.has(node)) return;
+    seen.add(node);
+    if (Array.isArray(node)) { for (const child of node) visit(child); return; }
+    for (const [key, value] of Object.entries(node)) {
+      if (/^(vehicle_)?(mileage|odometer|transmission|condition|make|model|year)$/i.test(key)) put(key, value);
+      if (value && typeof value === "object") visit(value);
+    }
+  };
+  visit(target);
+  if (result.mileage) result.mileage = numericMileage(result.mileage) ?? result.mileage;
+  if (result.vehicle_mileage) result.mileage = numericMileage(result.vehicle_mileage) ?? result.mileage;
+  if (result.transmission) result.transmission = normalizeTransmission(result.transmission);
+  return result;
+}
+
+function normalizeTransmission(value) {
+  const text = `${value ?? ""}`.toLowerCase();
+  if (/manual|stick|standard|\b5\s*speed\b|\b6\s*speed\b/.test(text)) return "manual";
+  if (/automatic|\bauto\b|cvt|dsg|pdk/.test(text)) return "automatic";
+  return `${value}`.trim();
+}
+
+function numericMileage(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value >= 100 && value <= 1_000_000 ? Math.round(value) : null;
+  if (typeof value === "string") {
+    const match = value.match(/\b([\d,]+(?:\.\d+)?)\s*(k)?\s*(?:miles?|mi)?\b/i);
+    if (!match) return null;
+    const parsed = Number(match[1].replaceAll(",", "")) * (match[2] ? 1000 : 1);
+    return Number.isFinite(parsed) && parsed >= 100 && parsed <= 1_000_000 ? Math.round(parsed) : null;
+  }
+  if (value && typeof value === "object") {
+    for (const key of ["value", "text", "label", "formatted_value", "display_value"]) {
+      if (value[key] !== undefined) {
+        const parsed = numericMileage(value[key]);
+        if (parsed !== null) return parsed;
+      }
+    }
+  }
+  return null;
+}
+
+function extractMarketplaceMileage(target) {
+  const seen = new Set();
+  const visit = (value, hinted = false) => {
+    if (!value || typeof value !== "object" || seen.has(value)) return null;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        const named = /mileage|odometer|\bodo\b/i.test(`${entry?.attribute_name ?? ""} ${entry?.name ?? ""} ${entry?.key ?? ""}`);
+        const parsed = visit(entry, named);
+        if (parsed !== null) return parsed;
+      }
+      return null;
+    }
+    if (hinted) {
+      for (const key of ["value", "text", "label", "formatted_value", "display_value", "attribute_value"]) {
+        const parsed = numericMileage(value[key]);
+        if (parsed !== null) return parsed;
+      }
+    }
+    for (const [key, child] of Object.entries(value)) {
+      if (/mileage|odometer|odometer_reading|vehicle_miles/i.test(key)) {
+        const direct = numericMileage(child);
+        if (direct !== null) return direct;
+        const nested = visit(child, true);
+        if (nested !== null) return nested;
+      } else if (child && typeof child === "object") {
+        const nested = visit(child);
+        if (nested !== null) return nested;
+      }
+    }
+    return null;
+  };
+  return visit(target);
+}
+
+export function parseListingImagesResponse(data) {
+  const photos = data?.data?.viewer?.marketplace_product_details_page?.target?.listing_photos ?? [];
+  return [...new Set(photos.map((photo) => photo?.image?.uri).filter(Boolean))];
+}
+
+export class FacebookGraphqlClient {
+  constructor(options = {}) {
+    this.cookieHeader = options.facebookCookie ?? "";
+    this.chromeProfile = options.chromeProfile ?? "Default";
+    this.userAgent = options.facebookUserAgent ?? DEFAULT_USER_AGENT;
+    this.session = null;
+    this.reqCounter = 0;
+  }
+
+  async ensureSession() {
+    if (this.session) {
+      return this.session;
+    }
+
+    let cookies;
+    let cookieHeader = this.cookieHeader;
+    if (cookieHeader) {
+      cookies = parseCookieHeader(cookieHeader);
+    } else {
+      cookies = await extractChromeCookies("facebook.com", this.chromeProfile);
+      cookieHeader = cookiesToHeader(cookies);
+    }
+
+    const userId = getCookieValue(cookies, "c_user");
+    if (!userId) {
+      throw new Error("No c_user cookie found. Log into Facebook in Chrome or set FB_COOKIE.");
+    }
+
+    const tokens = await this.extractTokens(cookieHeader);
+    this.session = {
+      cookies,
+      cookieHeader,
+      userId,
+      ...tokens
+    };
+    return this.session;
+  }
+
+  async extractTokens(cookieHeader) {
+    const response = await fetch(MARKETPLACE_URL, {
+      headers: {
+        ...BROWSER_HEADERS,
+        "user-agent": this.userAgent,
+        cookie: cookieHeader,
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "cache-control": "max-age=0",
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "none",
+        "sec-fetch-user": "?1",
+        "upgrade-insecure-requests": "1"
+      },
+      redirect: "follow"
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch Marketplace token page: HTTP ${response.status}`);
+    }
+
+    const html = await response.text();
+    const fbDtsg =
+      html.match(/"DTSGInitData"\s*,\s*\[\]\s*,\s*\{"token"\s*:\s*"([^"]+)"/)?.[1] ??
+      html.match(/"DTSGInitialData"\s*,\s*\[\]\s*,\s*\{"token"\s*:\s*"([^"]+)"/)?.[1] ??
+      html.match(/"dtsg"\s*:\s*\{"token"\s*:\s*"([^"]+)"/)?.[1];
+
+    if (!fbDtsg) {
+      throw new Error("Could not extract fb_dtsg token. Facebook session may be expired.");
+    }
+
+    return {
+      fbDtsg,
+      lsd:
+        html.match(/"LSD"\s*,\s*\[\]\s*,\s*\{"token"\s*:\s*"([^"]+)"/)?.[1] ??
+        html.match(/name="lsd"\s+value="([^"]+)"/)?.[1] ??
+        "",
+      jazoest: html.match(/jazoest=(\d+)/)?.[1] ?? "",
+      clientRevision: html.match(/"client_revision"\s*:\s*(\d+)/)?.[1] ?? html.match(/__spin_r:\s*(\d+)/)?.[1] ?? "1"
+    };
+  }
+
+  async graphqlRequest(docId, variables) {
+    const session = await this.ensureSession();
+    this.reqCounter += 1;
+
+    const body = new URLSearchParams({
+      fb_dtsg: session.fbDtsg,
+      lsd: session.lsd,
+      jazoest: session.jazoest,
+      doc_id: docId,
+      variables: JSON.stringify(variables),
+      __a: "1",
+      __req: this.reqCounter.toString(36),
+      __rev: session.clientRevision
+    });
+
+    const response = await fetch(GRAPHQL_URL, {
+      method: "POST",
+      headers: {
+        ...BROWSER_HEADERS,
+        "user-agent": this.userAgent,
+        cookie: session.cookieHeader,
+        "content-type": "application/x-www-form-urlencoded",
+        accept: "*/*",
+        origin: "https://www.facebook.com",
+        referer: MARKETPLACE_URL,
+        "x-fb-lsd": session.lsd,
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin"
+      },
+      body: body.toString()
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      this.session = null;
+      throw new Error("Facebook session expired or was rejected.");
+    }
+
+    if (!response.ok) {
+      throw new Error(`Facebook GraphQL request failed: HTTP ${response.status}`);
+    }
+
+    let text = await response.text();
+    const jsonStart = text.indexOf("{");
+    if (jsonStart > 0) {
+      text = text.slice(jsonStart);
+    }
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`Could not parse Facebook GraphQL response: ${text.slice(0, 200)}`);
+    }
+  }
+
+  async searchListings(params) {
+    const data = await this.graphqlRequest(MARKETPLACE_SEARCH_DOC_ID, buildSearchVariables(params));
+    return parseSearchResponse(data, params.limit);
+  }
+
+  async getListingDetail(listingId) {
+    const [data, photosData] = await Promise.all([
+      this.graphqlRequest(LISTING_DETAIL_DOC_ID, buildListingDetailVariables(listingId)),
+      this.graphqlRequest(LISTING_PHOTOS_DOC_ID, { targetId: `${listingId}` })
+    ]);
+    const detail = parseListingDetailResponse(data, listingId);
+    const images = parseListingImagesResponse(photosData);
+    detail.images = [...new Set([detail.imageUrl, ...images].filter(Boolean))];
+    detail.imageUrl ||= detail.images[0] ?? "";
+    return detail;
+  }
+
+  async searchLocation(query) {
+    const data = await this.graphqlRequest(LOCATION_SEARCH_DOC_ID, buildLocationSearchVariables(query));
+    const edges = data?.data?.city_street_search?.street_results?.edges ?? [];
+    return edges.map((edge) => ({
+      name: edge.node?.single_line_address ?? edge.node?.subtitle ?? "Unknown",
+      latitude: edge.node?.location?.latitude ?? 0,
+      longitude: edge.node?.location?.longitude ?? 0
+    }));
+  }
+}
