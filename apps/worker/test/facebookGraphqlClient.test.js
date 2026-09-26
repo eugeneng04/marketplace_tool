@@ -145,3 +145,26 @@ test("sync fetches details only for incomplete, inconsistent, or stale listings"
   assert.equal(shouldFetchDetail({ ...common, current_price: 1234, status: "saved", last_scraped_at: new Date(Date.now() - 13 * 3_600_000).toISOString() }, 24), true);
   assert.equal(shouldFetchDetail({ ...common, status: "hidden", image_urls: [] }, 24), false);
 });
+
+test("cookie-free session obtains page tokens without Chrome extraction", async () => {
+  const { FacebookGraphqlClient } = await import('../src/facebookGraphqlClient.js');
+  const client = new FacebookGraphqlClient({ useChromeCookies: false });
+  client.extractTokens = async cookie => {
+    assert.equal(cookie, '');
+    return { fbDtsg: 'public-page-token', lsd: 'public-lsd' };
+  };
+  const session = await client.ensureSession();
+  assert.equal(session.userId, '0');
+  assert.equal(session.cookieHeader, '');
+  assert.equal(session.fbDtsg, 'public-page-token');
+});
+
+test("explicit cookie session remains available", async () => {
+  const { FacebookGraphqlClient } = await import('../src/facebookGraphqlClient.js');
+  const client = new FacebookGraphqlClient({ facebookCookie: 'c_user=123; xs=test', useChromeCookies: false });
+  client.extractTokens = async cookie => {
+    assert.equal(cookie, 'c_user=123; xs=test');
+    return { fbDtsg: 'token' };
+  };
+  assert.equal((await client.ensureSession()).userId, '123');
+});

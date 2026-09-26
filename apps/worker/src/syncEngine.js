@@ -72,6 +72,17 @@ export function matchesProfileFilters(profile, raw) {
   const parsed = parseVehicleListing(raw);
   const attrs = parsed.attributes ?? {};
   const year = Number(attrs.year);
+  const generation = filters.generation;
+  if (generation) {
+    const title = `${raw.titleRaw ?? ""}`.toLowerCase();
+    const make = `${generation.make ?? ""}`.toLowerCase();
+    const model = `${generation.model ?? ""}`.toLowerCase();
+    const modelMatches = model === "3 series"
+      ? /\b(?:3\s*series|3\d{2}[a-z]{0,3})\b/.test(title)
+      : title.includes(model);
+    if (!make || !model || !title.includes(make) || !modelMatches || !Number.isFinite(year) ||
+      year < Number(generation.yearFrom) || year > Number(generation.yearTo)) return false;
+  }
   const mileage = Number(attrs.mileage);
   if (filters.transmission && attrs.transmission !== filters.transmission) return false;
   if (filters.yearMin && (!Number.isFinite(year) || year < Number(filters.yearMin))) return false;

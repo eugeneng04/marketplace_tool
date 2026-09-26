@@ -22,8 +22,6 @@ services:
         sync: false
       - key: CONNECTOR_MODE
         value: facebook_graphql
-      - key: FB_COOKIE
-        sync: false
       - key: FB_MAX_REQUESTS_PER_MINUTE
         value: "3"
       - key: MAX_CARDS_PER_RUN

@@ -30,7 +30,7 @@ Backend-first MVP for local-first resale intelligence, designed to run as a web 
 - `mock`: deterministic synthetic Marketplace data for testing.
 - `facebook_graphql`: standalone direct GraphQL Marketplace queries adapted from `jdcodes1/facebook-marketplace-mcp`, without MCP or an LLM in the loop.
 
-`facebook_graphql` uses your existing Facebook session cookies from Chrome unless `FB_COOKIE` is provided.
+`facebook_graphql` defaults to cookie-free Marketplace page tokens. Facebook may restrict logged-out searches depending on the server IP or query; deployment success does not guarantee live results. Set `FB_USE_CHROME_COOKIES=true` to explicitly enable local Chrome-session extraction, or optionally provide `FB_COOKIE`.
 
 ## Environment variables
 
@@ -43,7 +43,8 @@ Backend-first MVP for local-first resale intelligence, designed to run as a web 
 
 When using direct Facebook GraphQL:
 - `CHROME_PROFILE` (optional, default `Default`)
-- `FB_COOKIE` (optional; skips Chrome cookie extraction if present)
+- `FB_COOKIE` (optional authenticated session)
+- `FB_USE_CHROME_COOKIES` (optional, default `false`; local macOS only)
 - `FB_USER_AGENT` (optional)
 
 Saved search profile sync with `CONNECTOR_MODE=facebook_graphql` requires coordinates in `filtersJson`, for example:

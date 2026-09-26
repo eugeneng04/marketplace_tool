@@ -535,6 +535,7 @@ export class FacebookGraphqlClient {
   constructor(options = {}) {
     this.cookieHeader = options.facebookCookie ?? "";
     this.chromeProfile = options.chromeProfile ?? "Default";
+    this.useChromeCookies = options.useChromeCookies ?? process.env.FB_USE_CHROME_COOKIES === "true";
     this.userAgent = options.facebookUserAgent ?? DEFAULT_USER_AGENT;
     this.session = null;
     this.reqCounter = 0;
@@ -545,25 +546,23 @@ export class FacebookGraphqlClient {
       return this.session;
     }
 
-    let cookies;
+    let cookies = [];
     let cookieHeader = this.cookieHeader;
     if (cookieHeader) {
       cookies = parseCookieHeader(cookieHeader);
-    } else {
+    } else if (this.useChromeCookies) {
       cookies = await extractChromeCookies("facebook.com", this.chromeProfile);
       cookieHeader = cookiesToHeader(cookies);
     }
 
     const userId = getCookieValue(cookies, "c_user");
-    if (!userId) {
-      throw new Error("No c_user cookie found. Log into Facebook in Chrome or set FB_COOKIE.");
-    }
+    // Logged-out Marketplace requests use page tokens without account cookies.
 
     const tokens = await this.extractTokens(cookieHeader);
     this.session = {
       cookies,
       cookieHeader,
-      userId,
+      userId: userId ?? "0",
       ...tokens
     };
     return this.session;
@@ -597,7 +596,7 @@ export class FacebookGraphqlClient {
       html.match(/"dtsg"\s*:\s*\{"token"\s*:\s*"([^"]+)"/)?.[1];
 
     if (!fbDtsg) {
-      throw new Error("Could not extract fb_dtsg token. Facebook session may be expired.");
+      throw new Error("Could not extract Marketplace page tokens. Facebook may be restricting access from this server.");
     }
 
     return {
@@ -660,9 +659,15 @@ export class FacebookGraphqlClient {
     }
 
     try {
-      return JSON.parse(text);
-    } catch {
-      throw new Error(`Could not parse Facebook GraphQL response: ${text.slice(0, 200)}`);
+      const data = JSON.parse(text);
+      if (data.errors?.length || data.error) {
+        this.session = null;
+        throw new Error("Facebook rejected the Marketplace query; no results were imported.");
+      }
+      return data;
+    } catch (error) {
+      if (error instanceof SyntaxError) throw new Error("Could not parse Facebook GraphQL response.");
+      throw error;
     }
   }
 

@@ -16,8 +16,8 @@ Local development retains the internal scheduler by default.
    not use Neon's transaction-mode pooled endpoint.
 3. In Render, create a Blueprint from this repository using `render.yaml`.
    It creates one Free Node web service and no Render database or paid services.
-4. Enter the Neon string as DATABASE_URL and your Facebook session cookie as
-   FB_COOKIE using Render's private environment settings. Start in mock mode if
+4. Enter the Neon string as DATABASE_URL using Render's private environment settings.
+   No FB_COOKIE is required; the connector defaults to logged-out page tokens. Start in mock mode if
    you want to verify deployment without live Facebook access.
 5. Deploy. The application automatically creates/updates its database schema.
    Open `/health` and then the root URL on your phone. Enter the generated
@@ -31,7 +31,7 @@ Local development retains the internal scheduler by default.
    recreate the searches or separately migrate your existing database.
 8. In GitHub Actions, run “Scheduled searches” manually. Confirm it succeeds,
    then inspect the app's run history and listings. Test a live Facebook search:
-   valid cookies on your Mac do not guarantee Facebook accepts a hosting IP.
+   Facebook may restrict logged-out searches from a hosting IP.
 
 ## Free-tier operation and limitations
 
@@ -57,7 +57,7 @@ Local development retains the internal scheduler by default.
   doesn't delete existing history or add a retention policy.
 - Keep API_TOKEN and SCHEDULER_TOKEN private. The UI is publicly loadable, but
   production API data requires API_TOKEN. Scheduled calls use SCHEDULER_TOKEN.
-- Update FB_COOKIE privately on Render when the session expires.
+- FB_COOKIE is optional. Only opt into authenticated access if you choose to use it.
 
 Pricing references:
 - https://render.com/docs/free

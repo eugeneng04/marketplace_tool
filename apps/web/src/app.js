@@ -263,6 +263,12 @@ async function loadVehicleGenerations() {
   const data = await api("/vehicle-generations");
   state.generations = data.generations ?? [];
   $("#generationCount").textContent = state.generations.length;
+  const selector = $("#profileGenerationInput");
+  if (selector) {
+    const selected = selector.value;
+    selector.innerHTML = `<option value="">Any generation</option>${state.generations.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.make)} ${escapeHtml(item.model)} · ${escapeHtml(item.code)} (${item.yearFrom}–${item.yearTo})</option>`).join("")}`;
+    if (state.generations.some((item) => item.id === selected)) selector.value = selected;
+  }
   $("#vehicleGenerationsList").innerHTML = state.generations.map((item) => `
     <article class="profile-card"><div><div class="profile-name">${escapeHtml(item.make)} ${escapeHtml(item.model)} · ${escapeHtml(item.code)}</div><div class="profile-meta">${item.yearFrom}–${item.yearTo} · ${item.source === "suggested" ? "Suggested" : "Custom"}</div></div>
     <div class="profile-actions"><button class="status-button" data-edit-generation="${escapeHtml(item.id)}" type="button">Edit</button><button class="status-button" data-delete-generation="${escapeHtml(item.id)}" type="button">Delete</button></div></article>
@@ -803,6 +809,7 @@ async function saveProfile(event) {
     alertMaxAgeHours: numberOrNull($("#profileAlertAgeInput")?.value) ?? 72,
     groupId: $("#profileGroupInput")?.value || null,
     filtersJson: {
+      generation: selectedGenerationForProfile(),
       transmission: $("#profileTransmissionInput").value || undefined,
       yearMin: numberOrNull($("#profileYearMinInput").value),
       yearMax: numberOrNull($("#profileYearMaxInput").value),
@@ -826,6 +833,27 @@ async function saveProfile(event) {
   }
 }
 
+function selectedGenerationForProfile() {
+  const id = $("#profileGenerationInput")?.value;
+  const generation = state.generations.find((item) => item.id === id);
+  return generation ? {
+    id: generation.id,
+    make: generation.make,
+    model: generation.model,
+    code: generation.code,
+    yearFrom: generation.yearFrom,
+    yearTo: generation.yearTo
+  } : undefined;
+}
+
+function chooseProfileGeneration(generationId) {
+  const generation = state.generations.find((item) => item.id === generationId);
+  if (!generation) return;
+  $("#profileQueryInput").value = `${generation.make} ${generation.model}`;
+  $("#profileYearMinInput").value = generation.yearFrom;
+  $("#profileYearMaxInput").value = generation.yearTo;
+}
+
 function resetProfileForm() {
   $("#profileIdInput").value = "";
   $("#searchEditor").open = false;
@@ -834,6 +862,7 @@ function resetProfileForm() {
   $("#profileLocationInput").value = state.searchDefaults.location;
   $("#profileRadiusInput").value = state.searchDefaults.radiusMiles;
   $("#profileEnabledInput").checked = true;
+  $("#profileGenerationInput").value = "";
   $("#profileTransmissionInput").value = "";
   $("#profileYearMinInput").value = "";
   $("#profileYearMaxInput").value = "";
@@ -1011,6 +1040,7 @@ function bindEvents() {
   });
   $$(".nav-button").forEach((button) => button.addEventListener("click", () => setView(button.dataset.view)));
   $$("[data-view-jump]").forEach((button) => button.addEventListener("click", () => setView(button.dataset.viewJump)));
+  $("#profileGenerationInput").addEventListener("change", (event) => chooseProfileGeneration(event.target.value));
   $("#refreshButton").addEventListener("click", refreshAll);
   $("#refreshRunsButton").addEventListener("click", loadRuns);
   $("#healthButton").addEventListener("click", async () => {
@@ -1158,6 +1188,7 @@ function bindEvents() {
         $("#profileMaxMileageInput").value = profile.filtersJson?.maxMileage ?? "";
         $("#profileCleanTitleInput").checked = Boolean(profile.filtersJson?.cleanTitleOnly);
         $("#profileModifiedInput").checked = Boolean(profile.filtersJson?.modifiedOnly);
+        $("#profileGenerationInput").value = profile.filtersJson?.generation?.id ?? "";
         }
       if (target.dataset.runProfile) await runProfile(target.dataset.runProfile, target);
       if (target.dataset.runGroup) {
