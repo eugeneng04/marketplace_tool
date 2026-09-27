@@ -88,6 +88,25 @@ test("detail-dependent search filters still fetch listing details", async () => 
   assert.equal(connector.detailRequests, 1);
 });
 
+test("title and year filters eliminate cards before detail requests", async () => {
+  const connector = makeConnector();
+  const run = await runProfileSync({
+    db: {}, connector,
+    profile: {
+      id: "profile-1", query: "Civic", filtersJson: {
+        transmission: "manual",
+        generation: { make: "Honda", model: "Civic", yearFrom: 2016, yearTo: 2020 }
+      }
+    },
+    dbOps: makeDbOps()
+  });
+
+  assert.equal(run.status, "completed");
+  assert.equal(run.resultsFound, 0);
+  assert.equal(run.detailPagesOpened, 0);
+  assert.equal(connector.detailRequests, 0);
+});
+
 test("GraphQL HTTP search flows through connector and run persistence without detail calls", async (t) => {
   const graphqlCalls = [];
   t.mock.method(globalThis, "fetch", async (url, options = {}) => {

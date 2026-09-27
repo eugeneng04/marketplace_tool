@@ -128,6 +128,20 @@ export async function runProfileSync({ db, connector, profile, preferManualTrans
 
     const preparedItems = await mapWithConcurrency(captured.cards, DETAIL_FETCH_CONCURRENCY, async (card) => {
       const cardRaw = connector.normalizeCardToRawSourceItem(card, captured.capturedAt);
+      // Apply title/year filters before spending a rate-limited GraphQL request
+      // on the full listing. These fields are already present on search cards.
+      const cardFilters = {
+        ...profile,
+        filtersJson: {
+          ...(profile.filtersJson ?? {}),
+          transmission: undefined,
+          maxMileage: undefined,
+          cleanTitleOnly: false,
+          modifiedOnly: false
+        }
+      };
+      if (!matchesProfileFilters(cardFilters, cardRaw)) return { card, raw: cardRaw, skipped: true };
+
       const refreshState = await ops.getItemRefreshState(db, {
         normalizedUrl: cardRaw.normalizedUrl,
         sourceItemId: cardRaw.sourceItemId
@@ -154,7 +168,7 @@ export async function runProfileSync({ db, connector, profile, preferManualTrans
       }
       return { card, raw };
     });
-    const matchingItems = preparedItems.filter(({ raw }) => matchesProfileFilters(profile, raw));
+    const matchingItems = preparedItems.filter(({ raw, skipped }) => !skipped && matchesProfileFilters(profile, raw));
     summary.resultsFound = matchingItems.length;
     matchingItems.sort((left, right) => {
       const leftDate = Date.parse(left.raw.sourceMetadata?.postedDate ?? "");
