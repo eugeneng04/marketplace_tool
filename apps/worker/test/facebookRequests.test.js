@@ -59,7 +59,7 @@ test('page and GraphQL calls use the same limiter and rejection clears the sessi
   });
   const client = new FacebookGraphqlClient({useChromeCookies:false,scheduleRequest:clock.schedule});
   await assert.rejects(client.searchListings({query:'car',latitude:1,longitude:2,limit:1}), /123: Query denied/);
-  assert.deepEqual(requests.map(r => r.time),[0,20000]);
+  assert.deepEqual(requests.map(r => r.time),[0,3000]);
   assert.equal(client.session,null);
 });
 

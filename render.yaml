@@ -6,7 +6,7 @@ services:
     buildCommand: npm install
     startCommand: npm --workspace @resale-intelligence/worker start
     healthCheckPath: /health
-    autoDeploy: false
+    autoDeploy: true
     envVars:
       - key: NODE_VERSION
         value: 22
@@ -23,6 +23,6 @@ services:
       - key: CONNECTOR_MODE
         value: facebook_graphql
       - key: FB_MAX_REQUESTS_PER_MINUTE
-        value: "3"
+        value: "20"
       - key: MAX_CARDS_PER_RUN
         value: "25"

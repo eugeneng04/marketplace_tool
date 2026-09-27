@@ -93,8 +93,18 @@ export function matchesProfileFilters(profile, raw) {
   return true;
 }
 
-export async function runProfileSync({ db, connector, profile, preferManualTransmission }) {
-  const run = await startSearchRun(db, profile.id, "facebook_marketplace");
+export async function runProfileSync({ db, connector, profile, preferManualTransmission, dbOps = {} }) {
+  const ops = {
+    startSearchRun,
+    finishSearchRun,
+    getItemRefreshState,
+    saveParsedItem,
+    upsertRawItemSnapshot,
+    computeMarketStats,
+    upsertDealScore,
+    ...dbOps
+  };
+  const run = await ops.startSearchRun(db, profile.id, "facebook_marketplace");
   const configuredStaleHours = Number.parseInt(
     `${profile.filtersJson?.staleDetailHours ?? DEFAULT_STALE_DETAIL_HOURS}`,
     10
@@ -118,12 +128,25 @@ export async function runProfileSync({ db, connector, profile, preferManualTrans
 
     const preparedItems = await mapWithConcurrency(captured.cards, DETAIL_FETCH_CONCURRENCY, async (card) => {
       const cardRaw = connector.normalizeCardToRawSourceItem(card, captured.capturedAt);
-      const refreshState = await getItemRefreshState(db, {
+      const refreshState = await ops.getItemRefreshState(db, {
         normalizedUrl: cardRaw.normalizedUrl,
         sourceItemId: cardRaw.sourceItemId
       });
 
-      const needsDetail = shouldFetchDetail(refreshState, staleDetailHours);
+      // The GraphQL search response is enough to capture ordinary search
+      // results. Detail requests are individually rate limited and were making
+      // a 25-result run take several minutes. Fetch details during the run only
+      // when filters depend on fields the search response may omit. Existing
+      // incomplete/stale items remain eligible for the normal refresh policy.
+      const filters = profile.filtersJson ?? {};
+      const detailDependentFilters = Boolean(
+        filters.transmission || filters.maxMileage || filters.cleanTitleOnly || filters.modifiedOnly
+      );
+      const needsDetail = shouldFetchDetail(refreshState, staleDetailHours) &&
+        (detailDependentFilters || Boolean(refreshState && (
+          hoursSince(refreshState.last_scraped_at) >= staleDetailHours ||
+          !refreshState.description_raw?.trim() || !refreshState.image_urls?.length
+        )));
       const raw = needsDetail ? await connector.fetchListingDetail(card) : cardRaw;
       if (needsDetail) {
         raw.sourceMetadata = { ...(raw.sourceMetadata ?? {}), detailFetched: true };
@@ -143,7 +166,7 @@ export async function runProfileSync({ db, connector, profile, preferManualTrans
 
     for (const { card, raw } of matchingItems) {
       const parsedPrice = parsePrice(raw.priceRaw);
-      const upsertResult = await upsertRawItemSnapshot(db, {
+      const upsertResult = await ops.upsertRawItemSnapshot(db, {
         profile,
         runId: run.id,
         rank: card.rank,
@@ -158,9 +181,9 @@ export async function runProfileSync({ db, connector, profile, preferManualTrans
       }
 
       const parsed = parseVehicleListing(raw);
-      await saveParsedItem(db, upsertResult.itemId, parsed);
+      await ops.saveParsedItem(db, upsertResult.itemId, parsed);
 
-      const marketStats = await computeMarketStats(db, {
+      const marketStats = await ops.computeMarketStats(db, {
         category: profile.category,
         excludeItemId: upsertResult.itemId,
         make: parsed.attributes.make ?? null,
@@ -175,7 +198,7 @@ export async function runProfileSync({ db, connector, profile, preferManualTrans
         preferManualTransmission
       });
 
-      await upsertDealScore(db, upsertResult.itemId, score);
+      await ops.upsertDealScore(db, upsertResult.itemId, score);
 
       const alertCheck = meetsAlertRules(
         {
@@ -198,12 +221,12 @@ export async function runProfileSync({ db, connector, profile, preferManualTrans
       }
     }
 
-    summary.alertsCreated = await finishSearchRun(db, run.id, summary, profile.id, qualifyingAlertItemIds);
+    summary.alertsCreated = await ops.finishSearchRun(db, run.id, summary, profile.id, qualifyingAlertItemIds);
     return { runId: run.id, ...summary };
   } catch (error) {
     summary.status = "failed";
     summary.errorMessage = error instanceof Error ? error.message : "Unknown error";
-    await finishSearchRun(db, run.id, summary);
+    await ops.finishSearchRun(db, run.id, summary);
     throw error;
   }
 }

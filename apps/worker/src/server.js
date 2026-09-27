@@ -31,6 +31,7 @@ import {
   upsertDealScore,
   advanceSearchGroup,
   migrate,
+  recoverInterruptedSearchRuns,
   updateListingStatus,
   updateProfile,
   updateProfileGroup,
@@ -208,6 +209,7 @@ export async function createApp() {
 
   const db = createDb(config.databaseUrl);
   await migrate(db);
+  await recoverInterruptedSearchRuns(db);
   await configureFacebookCooldown(db);
 
   const connector = buildConnector(config);

@@ -558,7 +558,7 @@ export class FacebookGraphqlClient {
     this.userAgent = options.facebookUserAgent ?? DEFAULT_USER_AGENT;
     this.session = null;
     this.reqCounter = 0;
-    this.requestsPerMinute = Number(options.facebookMaxRequestsPerMinute ?? process.env.FB_MAX_REQUESTS_PER_MINUTE ?? 3);
+    this.requestsPerMinute = Number(options.facebookMaxRequestsPerMinute ?? process.env.FB_MAX_REQUESTS_PER_MINUTE ?? 20);
     if (!Number.isFinite(this.requestsPerMinute) || this.requestsPerMinute <= 0) {
       throw new Error("FB_MAX_REQUESTS_PER_MINUTE must be a positive number.");
     }
@@ -715,12 +715,9 @@ export class FacebookGraphqlClient {
   async getListingDetail(listingId) {
     const data = await this.graphqlRequest(LISTING_DETAIL_DOC_ID, buildListingDetailVariables(listingId));
     const detail = parseListingDetailResponse(data, listingId);
-    // The detail response normally includes the gallery. Fetch photos only when
-    // it is missing, and never enqueue a photo request after a rejected detail.
-    if (detail.images.length <= 1) {
-      const photosData = await this.graphqlRequest(LISTING_PHOTOS_DOC_ID, { targetId: `${listingId}` });
-      detail.images = [...new Set([...detail.images, ...parseListingImagesResponse(photosData)].filter(Boolean))];
-    }
+    // Search cards include a thumbnail, so one detail request is sufficient for
+    // enrichment. A separate gallery request multiplied run time for listings
+    // whose detail response omitted photos.
     detail.imageUrl ||= detail.images[0] ?? "";
     return detail;
   }

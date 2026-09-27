@@ -32,7 +32,7 @@ export function createFacebookRequestLimiter({ now = Date.now, sleep = ms => new
     if (store) blockedUntil = Math.max(blockedUntil, Number(await store.read()) || 0);
     if (blockedUntil > now()) throw cooldownError(blockedUntil);
   }
-  function schedule(request, requestsPerMinute = 3) {
+  function schedule(request, requestsPerMinute = 20) {
     const rate = Number(requestsPerMinute);
     if (!Number.isFinite(rate) || rate <= 0) throw new Error('FB_MAX_REQUESTS_PER_MINUTE must be a positive number.');
     const result = queue.then(async () => {

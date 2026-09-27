@@ -232,6 +232,15 @@ export async function migrate(db) {
   await db.pool.query(SCHEMA_SQL);
 }
 
+export async function recoverInterruptedSearchRuns(db) {
+  await db.pool.query(`
+    UPDATE search_runs
+    SET status = 'failed', finished_at = NOW(),
+        error_message = COALESCE(error_message, 'Run was interrupted when the worker restarted.')
+    WHERE status = 'running'
+  `);
+}
+
 function mapGeneration(row) {
   return { id: row.id, make: row.make, model: row.model, code: row.code, yearFrom: row.year_from, yearTo: row.year_to, source: row.source };
 }
@@ -664,6 +673,15 @@ export async function finishSearchRun(db, runId, summary, alertProfileId = null,
 }
 
 export async function listRuns(db, profileId, limit = 50) {
+  // A worker restart can interrupt a run after its initial INSERT and leave a
+  // permanent "running" row. Runs normally finish well inside this window.
+  await db.pool.query(`
+    UPDATE search_runs
+    SET status = 'failed', finished_at = NOW(),
+        error_message = COALESCE(error_message, 'Run was interrupted before it could finish.')
+    WHERE status = 'running' AND started_at < NOW() - INTERVAL '15 minutes'
+  `);
+
   const params = [];
   let where = "";
 
