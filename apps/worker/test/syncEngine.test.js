@@ -74,6 +74,44 @@ test("ordinary GraphQL search completes without serial detail requests", async (
   assert.equal(connector.detailRequests, 0);
 });
 
+test("placeholder search cards fetch details before being counted and saved", async () => {
+  const connector = makeConnector();
+  connector.captureListingCards = async () => ({
+    capturedAt: new Date(),
+    cards: [{
+      rank: 1,
+      sourceItemId: "corvette-1",
+      listingUrl: "https://www.facebook.com/marketplace/item/corvette-1/",
+      titleRaw: "Marketplace listing",
+      priceRaw: "",
+      locationRaw: "",
+      rawCardText: "Marketplace listing"
+    }]
+  });
+  connector.fetchListingDetail = async (card) => ({
+    ...connector.normalizeCardToRawSourceItem(card),
+    titleRaw: "2020 Chevrolet Corvette",
+    priceRaw: "$65,000",
+    imageUrls: ["https://example.test/corvette.jpg"],
+    sourceMetadata: { detailFetched: true }
+  });
+  const saved = [];
+  const dbOps = makeDbOps();
+  dbOps.upsertRawItemSnapshot = async (_db, args) => {
+    saved.push(args.rawItem);
+    return { itemId: "corvette-item", isNew: true };
+  };
+
+  const run = await runProfileSync({
+    db: {}, connector, profile: { id: "profile-corvette", query: "corvette", filtersJson: {} }, dbOps
+  });
+
+  assert.equal(run.status, "completed");
+  assert.equal(run.resultsFound, 1);
+  assert.equal(run.detailPagesOpened, 1);
+  assert.equal(saved[0].titleRaw, "2020 Chevrolet Corvette");
+});
+
 test("detail-dependent search filters still fetch listing details", async () => {
   const connector = makeConnector();
   const run = await runProfileSync({

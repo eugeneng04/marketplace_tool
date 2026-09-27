@@ -15,6 +15,10 @@ import { parseVehicleListing } from "./vehicleParser.js";
 const DEFAULT_STALE_DETAIL_HOURS = 24;
 const DETAIL_FETCH_CONCURRENCY = 5;
 
+function cardNeedsDetail(card) {
+  return !card.titleRaw || /^Marketplace listing(?:\s|$)/i.test(card.titleRaw.trim());
+}
+
 async function mapWithConcurrency(items, concurrency, mapper) {
   const results = new Array(items.length);
   let nextIndex = 0;
@@ -128,6 +132,7 @@ export async function runProfileSync({ db, connector, profile, preferManualTrans
 
     const preparedItems = await mapWithConcurrency(captured.cards, DETAIL_FETCH_CONCURRENCY, async (card) => {
       const cardRaw = connector.normalizeCardToRawSourceItem(card, captured.capturedAt);
+      const needsCardEnrichment = cardNeedsDetail(card);
       // Apply title/year filters before spending a rate-limited GraphQL request
       // on the full listing. These fields are already present on search cards.
       const cardFilters = {
@@ -140,7 +145,7 @@ export async function runProfileSync({ db, connector, profile, preferManualTrans
           modifiedOnly: false
         }
       };
-      if (!matchesProfileFilters(cardFilters, cardRaw)) return { card, raw: cardRaw, skipped: true };
+      if (!needsCardEnrichment && !matchesProfileFilters(cardFilters, cardRaw)) return { card, raw: cardRaw, skipped: true };
 
       const refreshState = await ops.getItemRefreshState(db, {
         normalizedUrl: cardRaw.normalizedUrl,
@@ -157,7 +162,7 @@ export async function runProfileSync({ db, connector, profile, preferManualTrans
         filters.transmission || filters.maxMileage || filters.cleanTitleOnly || filters.modifiedOnly
       );
       const needsDetail = shouldFetchDetail(refreshState, staleDetailHours) &&
-        (detailDependentFilters || Boolean(refreshState && (
+        (needsCardEnrichment || detailDependentFilters || Boolean(refreshState && (
           hoursSince(refreshState.last_scraped_at) >= staleDetailHours ||
           !refreshState.description_raw?.trim() || !refreshState.image_urls?.length
         )));
