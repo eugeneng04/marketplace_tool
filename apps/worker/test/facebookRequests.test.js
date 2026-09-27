@@ -127,3 +127,20 @@ test('detail rejection does not trigger a photo request; existing gallery avoids
   assert.equal(calls,1);
   assert.equal(detail.images.length,2);
 });
+
+test('detail requests fetch the scoped photo gallery when the listing has no photos', async () => {
+  const client=new FacebookGraphqlClient({useChromeCookies:false});
+  const calls=[];
+  client.graphqlRequest=async(docId)=>{
+    calls.push(docId);
+    if (calls.length === 1) return {data:{viewer:{marketplace_product_details_page:{target:{id:'123',marketplace_listing_title:'2020 Chevrolet Corvette'}}}}};
+    return {data:{viewer:{marketplace_product_details_page:{target:{listing_photos:[{image:{uri:'https://example.com/corvette.jpg'}}]}}}}};
+  };
+
+  const detail=await client.getListingDetail('123');
+
+  assert.equal(calls.length,2);
+  assert.notEqual(calls[0],calls[1]);
+  assert.deepEqual(detail.images,['https://example.com/corvette.jpg']);
+  assert.equal(detail.imageUrl,'https://example.com/corvette.jpg');
+});

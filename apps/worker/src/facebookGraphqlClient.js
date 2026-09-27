@@ -715,9 +715,12 @@ export class FacebookGraphqlClient {
   async getListingDetail(listingId) {
     const data = await this.graphqlRequest(LISTING_DETAIL_DOC_ID, buildListingDetailVariables(listingId));
     const detail = parseListingDetailResponse(data, listingId);
-    // Search cards include a thumbnail, so one detail request is sufficient for
-    // enrichment. A separate gallery request multiplied run time for listings
-    // whose detail response omitted photos.
+    // Search cards usually include a thumbnail. Cursor-only search results do
+    // not, so fetch the listing-scoped gallery only when detail also omitted it.
+    if (!detail.images.length) {
+      const photoData = await this.graphqlRequest(LISTING_PHOTOS_DOC_ID, buildListingDetailVariables(listingId));
+      detail.images = parseListingImagesResponse(photoData);
+    }
     detail.imageUrl ||= detail.images[0] ?? "";
     return detail;
   }
