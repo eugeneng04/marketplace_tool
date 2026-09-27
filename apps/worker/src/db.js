@@ -213,6 +213,10 @@ CREATE INDEX IF NOT EXISTS idx_deal_alerts_created ON deal_alerts(created_at DES
 CREATE UNIQUE INDEX IF NOT EXISTS idx_comps_item_url ON comparable_sales(item_id, url);
 `;
 
+function nullableTimestamp(value) {
+  return value === "" || (typeof value === "string" && value.trim() === "") ? null : value ?? null;
+}
+
 export function createDb(databaseUrl) {
   const pool = new Pool({
     connectionString: databaseUrl,
@@ -568,7 +572,7 @@ export async function createComp(db, itemId, comp) {
       comp.url,
       comp.title,
       comp.soldPrice,
-      comp.soldAt,
+      nullableTimestamp(comp.soldAt),
       comp.mileage ?? null,
       comp.transmission ?? "unknown",
       comp.note,
@@ -761,7 +765,7 @@ export async function upsertRawItemSnapshot(db, args) {
           rawItem.locationCity ?? null,
           rawItem.locationRegion ?? profile.location,
           now,
-          rawItem.sourceMetadata?.postedDate ?? null,
+          nullableTimestamp(rawItem.sourceMetadata?.postedDate),
           rawItem.sourceMetadata?.detailFetched === true
         ]
       );
@@ -805,7 +809,7 @@ export async function upsertRawItemSnapshot(db, args) {
           parsedPrice,
           rawItem.sourceItemId ?? null,
           now,
-          rawItem.sourceMetadata?.postedDate ?? null,
+          nullableTimestamp(rawItem.sourceMetadata?.postedDate),
           rawItem.sourceMetadata?.detailFetched === true
         ]
       );
@@ -935,7 +939,7 @@ export async function updateListingDetail(db, itemId, rawItem) {
        posted_at = COALESCE($8::timestamptz, posted_at),
        last_scraped_at = $9, updated_at = $9
      WHERE id = $1 RETURNING id`,
-    [itemId, rawItem.titleRaw ?? "", rawItem.descriptionRaw ?? "", rawItem.priceRaw ?? "", rawItem.locationRaw ?? "", JSON.stringify(rawItem.imageUrls ?? []), rawItem.sellerRaw ?? "", rawItem.sourceMetadata?.postedDate ?? null, nowIso()]
+    [itemId, rawItem.titleRaw ?? "", rawItem.descriptionRaw ?? "", rawItem.priceRaw ?? "", rawItem.locationRaw ?? "", JSON.stringify(rawItem.imageUrls ?? []), rawItem.sellerRaw ?? "", nullableTimestamp(rawItem.sourceMetadata?.postedDate), nowIso()]
   );
   return result.rowCount > 0;
 }
