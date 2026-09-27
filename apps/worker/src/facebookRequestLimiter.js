@@ -1,7 +1,9 @@
-export const FACEBOOK_COOLDOWN_MS = 60 * 60 * 1000;
+// Facebook often omits Retry-After from GraphQL throttling errors. A missing
+// header must not turn one rejection into an hour-long application outage.
+export const FACEBOOK_COOLDOWN_MS = 5 * 60 * 1000;
 
 function cooldownError(until) {
-  const error = new Error(`Facebook rate limit reached. Facebook requests are paused until ${new Date(until).toISOString()}. Existing listings remain available; Facebook may require more time before accepting requests.`);
+  const error = new Error(`Facebook rate limit reached. Facebook requests are paused until ${new Date(until).toISOString()}. Existing listings remain available; retry after the stated time.`);
   error.code = 'FACEBOOK_COOLDOWN';
   error.retryAt = until;
   return error;
@@ -49,7 +51,7 @@ export function createFacebookRequestLimiter({ now = Date.now, sleep = ms => new
         const hasRetryTime = Number.isFinite(retryDate) && retryDate > now();
         const until = hasRetryTime ? retryDate : now() + FACEBOOK_COOLDOWN_MS;
         blockedUntil = Math.max(blockedUntil, until);
-        if (store) await store.write(blockedUntil);
+        if (store) await store.write(blockedUntil, { retryAfter: hasRetryTime });
         throw cooldownError(blockedUntil);
       }
       return response;
@@ -73,16 +75,25 @@ export async function configureFacebookCooldown(db) {
       const result = await db.pool.query("SELECT value_json FROM app_settings WHERE key = 'facebook_cooldown'");
       return Number(result.rows[0]?.value_json?.until) || 0;
     },
-    async write(until) {
+    async write(until, { retryAfter = false } = {}) {
       await db.pool.query(`INSERT INTO app_settings(key,value_json,updated_at)
-        VALUES ('facebook_cooldown',jsonb_build_object('until',$1::bigint),NOW())
+        VALUES ('facebook_cooldown',jsonb_build_object('until',$1::bigint,'retryAfter',$2::boolean),NOW())
         ON CONFLICT(key) DO UPDATE SET value_json=jsonb_build_object('until',GREATEST(
-          COALESCE((app_settings.value_json->>'until')::bigint,0),$1::bigint)),updated_at=NOW()`, [until]);
+          COALESCE((app_settings.value_json->>'until')::bigint,0),$1::bigint),
+          'retryAfter',$2::boolean),updated_at=NOW()`, [until, retryAfter]);
     }
   };
+  // Previous releases stored the application's one-hour fallback exactly like
+  // a server-provided Retry-After. Bound those legacy lockouts during upgrade.
+  await db.pool.query(`UPDATE app_settings SET value_json=jsonb_build_object(
+      'until',(extract(epoch from NOW() + INTERVAL '5 minutes') * 1000)::bigint,
+      'retryAfter',false), updated_at=NOW()
+    WHERE key='facebook_cooldown' AND NOT (value_json ? 'retryAfter')
+      AND COALESCE((value_json->>'until')::bigint,0) >
+        (extract(epoch from NOW() + INTERVAL '5 minutes') * 1000)::bigint`);
   // Recover recent rejections from the previous release before accepting work.
   const recent = await db.pool.query(`SELECT MAX(finished_at) AS last_limited_at FROM search_runs
-    WHERE finished_at > NOW() - INTERVAL '1 hour'
+    WHERE finished_at > NOW() - INTERVAL '5 minutes'
     AND (error_message LIKE '%1675004%' OR error_message ILIKE '%rate limit exceeded%' OR error_message LIKE '%HTTP 429%')`);
   if (recent.rows[0]?.last_limited_at) await store.write(new Date(recent.rows[0].last_limited_at).getTime() + FACEBOOK_COOLDOWN_MS);
   scheduleFacebookRequest.setStore(store);

@@ -234,7 +234,10 @@ export function createFacebookGraphqlConnector({
       if (!listingId) {
         return this.normalizeCardToRawSourceItem(card);
       }
-      const detail = await client.getListingDetail(listingId);
+      // During a run, prefer one GraphQL request per card. Gallery fetching is
+      // available from the explicit listing refresh action, where it does not
+      // multiply every run's request count.
+      const detail = await client.getListingDetail(listingId, { fetchPhotos: false });
       return detailToRawSourceItem(detail, card);
     },
 

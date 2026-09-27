@@ -34,7 +34,7 @@ test('429 rejects queued work, honors longer Retry-After, and allows a later req
   assert.equal(calls,1);
 });
 
-test('429 honors a shorter server Retry-After instead of imposing the fallback hour', async () => {
+test('429 honors a shorter server Retry-After instead of imposing the fallback cooldown', async () => {
   const clock = fakeLimiter();
   await assert.rejects(clock.schedule(() => new Response('', {status:429, headers:{'retry-after':'60'}})), {code:'FACEBOOK_COOLDOWN'});
   assert.equal((await clock.schedule.status()).retryAt, new Date(60000).toISOString());
@@ -79,7 +79,7 @@ test('concurrent session creation fetches tokens once', async () => {
   assert.equal(calls,1);
 });
 
-test('HTTP 200 Facebook rate limit blocks all queued clients before their fetch', async () => {
+test('HTTP 200 Facebook rate limit blocks queued requests for the short fallback cooldown', async () => {
   const clock = fakeLimiter();
   let calls = 0;
   const result = await Promise.allSettled([
@@ -116,11 +116,12 @@ test('startup restores a recent rate limit into persistent storage', async () =>
   const calls=[];
   const db={pool:{query:async(sql,params)=>{
     calls.push({sql,params});
-    return {rows:sql.includes('MAX(finished_at)')?[{last_limited_at:new Date('2026-09-26T23:00:00Z')}]:[]};
+    return {rows:sql.includes('MAX(finished_at)')?[{last_limited_at:new Date('2026-09-26T23:58:00Z')}]:[]};
   }}};
   await configureFacebookCooldown(db);
-  assert.equal(calls.length,2);
-  assert.equal(calls[1].params[0],Date.parse('2026-09-27T00:00:00Z'));
+  assert.equal(calls.length,3);
+  assert.match(calls[0].sql,/NOT \(value_json \? 'retryAfter'\)/);
+  assert.equal(calls[2].params[0],Date.parse('2026-09-27T00:03:00Z'));
 });
 
 test('detail rejection does not trigger a photo request; existing gallery avoids extra request', async () => {
@@ -151,4 +152,15 @@ test('detail requests fetch the scoped photo gallery when the listing has no pho
   assert.notEqual(calls[0],calls[1]);
   assert.deepEqual(detail.images,['https://example.com/corvette.jpg']);
   assert.equal(detail.imageUrl,'https://example.com/corvette.jpg');
+});
+
+test('run detail mode avoids a second request for a missing photo gallery', async () => {
+  const client=new FacebookGraphqlClient({useChromeCookies:false});
+  let calls=0;
+  client.graphqlRequest=async()=>{calls++; return {data:{viewer:{marketplace_product_details_page:{target:{id:'123',marketplace_listing_title:'2020 Chevrolet Corvette'}}}}};};
+
+  const detail=await client.getListingDetail('123',{fetchPhotos:false});
+
+  assert.equal(calls,1);
+  assert.equal(detail.images.length,0);
 });
