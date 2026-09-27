@@ -23,6 +23,6 @@ services:
       - key: CONNECTOR_MODE
         value: facebook_graphql
       - key: FB_MAX_REQUESTS_PER_MINUTE
-        value: "20"
+        value: "10"
       - key: MAX_CARDS_PER_RUN
         value: "25"

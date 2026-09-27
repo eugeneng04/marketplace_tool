@@ -558,7 +558,7 @@ export class FacebookGraphqlClient {
     this.userAgent = options.facebookUserAgent ?? DEFAULT_USER_AGENT;
     this.session = null;
     this.reqCounter = 0;
-    this.requestsPerMinute = Number(options.facebookMaxRequestsPerMinute ?? process.env.FB_MAX_REQUESTS_PER_MINUTE ?? 20);
+    this.requestsPerMinute = Number(options.facebookMaxRequestsPerMinute ?? process.env.FB_MAX_REQUESTS_PER_MINUTE ?? 10);
     if (!Number.isFinite(this.requestsPerMinute) || this.requestsPerMinute <= 0) {
       throw new Error("FB_MAX_REQUESTS_PER_MINUTE must be a positive number.");
     }

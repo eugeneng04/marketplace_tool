@@ -45,8 +45,10 @@ export function createFacebookRequestLimiter({ now = Date.now, sleep = ms => new
       if (await isRateLimited(response)) {
         const retryAfter = response.headers?.get('retry-after');
         const seconds = retryAfter == null ? NaN : Number(retryAfter);
-        const until = Number.isFinite(seconds) ? now() + seconds * 1000 : Date.parse(retryAfter);
-        blockedUntil = Math.max(blockedUntil, now() + FACEBOOK_COOLDOWN_MS, Number.isFinite(until) ? until : 0);
+        const retryDate = Number.isFinite(seconds) ? now() + seconds * 1000 : Date.parse(retryAfter);
+        const hasRetryTime = Number.isFinite(retryDate) && retryDate > now();
+        const until = hasRetryTime ? retryDate : now() + FACEBOOK_COOLDOWN_MS;
+        blockedUntil = Math.max(blockedUntil, until);
         if (store) await store.write(blockedUntil);
         throw cooldownError(blockedUntil);
       }

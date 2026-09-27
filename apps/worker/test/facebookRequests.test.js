@@ -34,6 +34,14 @@ test('429 rejects queued work, honors longer Retry-After, and allows a later req
   assert.equal(calls,1);
 });
 
+test('429 honors a shorter server Retry-After instead of imposing the fallback hour', async () => {
+  const clock = fakeLimiter();
+  await assert.rejects(clock.schedule(() => new Response('', {status:429, headers:{'retry-after':'60'}})), {code:'FACEBOOK_COOLDOWN'});
+  assert.equal((await clock.schedule.status()).retryAt, new Date(60000).toISOString());
+  clock.advance(60000);
+  await clock.schedule(() => new Response('ok'));
+});
+
 test('configured limit reaches the connector; invalid limits fail early', () => {
   const config = loadConfig({FB_MAX_REQUESTS_PER_MINUTE:'7'});
   const connector = createFacebookConnector({mode:'facebook_graphql', facebookMaxRequestsPerMinute:config.facebookMaxRequestsPerMinute});
@@ -59,7 +67,7 @@ test('page and GraphQL calls use the same limiter and rejection clears the sessi
   });
   const client = new FacebookGraphqlClient({useChromeCookies:false,scheduleRequest:clock.schedule});
   await assert.rejects(client.searchListings({query:'car',latitude:1,longitude:2,limit:1}), /123: Query denied/);
-  assert.deepEqual(requests.map(r => r.time),[0,3000]);
+  assert.deepEqual(requests.map(r => r.time),[0,6000]);
   assert.equal(client.session,null);
 });
 
