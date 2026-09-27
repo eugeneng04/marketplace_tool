@@ -713,13 +713,14 @@ export class FacebookGraphqlClient {
   }
 
   async getListingDetail(listingId) {
-    const [data, photosData] = await Promise.all([
-      this.graphqlRequest(LISTING_DETAIL_DOC_ID, buildListingDetailVariables(listingId)),
-      this.graphqlRequest(LISTING_PHOTOS_DOC_ID, { targetId: `${listingId}` })
-    ]);
+    const data = await this.graphqlRequest(LISTING_DETAIL_DOC_ID, buildListingDetailVariables(listingId));
     const detail = parseListingDetailResponse(data, listingId);
-    const images = parseListingImagesResponse(photosData);
-    detail.images = [...new Set([detail.imageUrl, ...images].filter(Boolean))];
+    // The detail response normally includes the gallery. Fetch photos only when
+    // it is missing, and never enqueue a photo request after a rejected detail.
+    if (detail.images.length <= 1) {
+      const photosData = await this.graphqlRequest(LISTING_PHOTOS_DOC_ID, { targetId: `${listingId}` });
+      detail.images = [...new Set([...detail.images, ...parseListingImagesResponse(photosData)].filter(Boolean))];
+    }
     detail.imageUrl ||= detail.images[0] ?? "";
     return detail;
   }

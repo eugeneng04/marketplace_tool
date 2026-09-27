@@ -1,3 +1,4 @@
+import { configureFacebookCooldown, scheduleFacebookRequest } from "./facebookRequestLimiter.js";
 import { readFile } from "node:fs/promises";
 import { createDueSearchRunner } from "./scheduler.js";
 import { createServer } from "node:http";
@@ -207,6 +208,7 @@ export async function createApp() {
 
   const db = createDb(config.databaseUrl);
   await migrate(db);
+  await configureFacebookCooldown(db);
 
   const connector = buildConnector(config);
   const facebookGraphqlClient = buildFacebookGraphqlClient(config);
@@ -290,6 +292,10 @@ export async function createApp() {
         if (!deleted) return sendJson(res, 404, { error: "Vehicle generation not found." });
         return sendJson(res, 200, { deleted: true });
       }
+      if (pathname === "/facebook/status" && req.method === "GET") {
+        return sendJson(res, 200, await scheduleFacebookRequest.status());
+      }
+
       if (pathname === "/search-defaults" && req.method === "GET") {
         return sendJson(res, 200, { defaults: await getSearchDefaults(db) });
       }
@@ -680,6 +686,10 @@ export async function createApp() {
       return sendJson(res, 404, { error: "Route not found" });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unexpected error";
+      if (error?.code === "FACEBOOK_COOLDOWN") {
+        res.setHeader("Retry-After", Math.max(1, Math.ceil((error.retryAt - Date.now()) / 1000)));
+        return sendJson(res, 429, { error: message, retryAt: new Date(error.retryAt).toISOString() });
+      }
       return sendJson(res, 500, { error: message });
     }
   });

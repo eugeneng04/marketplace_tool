@@ -39,13 +39,19 @@ Local development retains the internal scheduler by default.
   worker process, including token-page, search, location, detail, and photo
   requests. At the default 3 requests/minute, starts are at least 20 seconds
   apart. Multiple worker processes do not share this in-memory limit.
-- Each full listing detail fetch uses two requests. A 15-listing import can
+- A listing detail fetch uses one request, plus a photo request if its gallery is missing. A 15-listing import can
   therefore take over 10 minutes; a 25-listing import can exceed 16 minutes.
   The scheduled caller's nine-minute timeout may expire while the worker is
   still running. Check run history before starting another run; reduce
   `MAX_CARDS_PER_RUN` if shorter runs are required.
-- HTTP 429 pauses the shared queue for at least one minute and honors a longer
-  `Retry-After`. Rejected requests are not automatically retried. Run errors
+- HTTP 429 and Facebook GraphQL rate-limit errors (including code 1675004 in
+  HTTP 200 responses) stop outgoing requests for at least one hour and honor a
+  longer `Retry-After`. The cooldown is stored in PostgreSQL and survives worker
+  restarts. Queued/manual requests fail immediately during the cooldown without
+  contacting Facebook; rejected requests are not automatically retried.
+  Authenticated `GET /facebook/status` reports the pause and next attempt time.
+  The one-hour pause is an application backoff, not a guarantee Facebook's
+  restriction will have expired. Run errors
   retain bounded Facebook error codes/messages with session credentials and
   links removed. Rate limiting cannot guarantee Facebook will accept access.
 
