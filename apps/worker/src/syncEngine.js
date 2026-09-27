@@ -151,6 +151,12 @@ export async function runProfileSync({ db, connector, profile, preferManualTrans
         normalizedUrl: cardRaw.normalizedUrl,
         sourceItemId: cardRaw.sourceItemId
       });
+      const hasCachedListing = needsCardEnrichment && refreshState &&
+        typeof refreshState.title_raw === "string" && refreshState.title_raw.trim() &&
+        !/^Marketplace listing(?:\s|$)/i.test(refreshState.title_raw.trim());
+      if (needsCardEnrichment && refreshState && ["rejected", "hidden", "sold"].includes(refreshState.status)) {
+        return { card, raw: cardRaw, skipped: true };
+      }
 
       // The GraphQL search response is enough to capture ordinary search
       // results. Detail requests are individually rate limited and were making
@@ -162,11 +168,28 @@ export async function runProfileSync({ db, connector, profile, preferManualTrans
         filters.transmission || filters.maxMileage || filters.cleanTitleOnly || filters.modifiedOnly
       );
       const needsDetail = shouldFetchDetail(refreshState, staleDetailHours) &&
-        (needsCardEnrichment || detailDependentFilters || Boolean(refreshState && (
+        ((needsCardEnrichment && !hasCachedListing) || detailDependentFilters || Boolean(refreshState && !needsCardEnrichment && (
           hoursSince(refreshState.last_scraped_at) >= staleDetailHours ||
           !refreshState.description_raw?.trim() || !refreshState.image_urls?.length
         )));
-      const raw = needsDetail ? await connector.fetchListingDetail(card) : cardRaw;
+      const raw = needsDetail
+        ? await connector.fetchListingDetail(card)
+        : hasCachedListing
+          ? {
+              ...cardRaw,
+              titleRaw: refreshState.title_raw,
+              descriptionRaw: refreshState.description_raw ?? cardRaw.descriptionRaw,
+              priceRaw: refreshState.price_raw ?? cardRaw.priceRaw,
+              locationRaw: refreshState.location_raw ?? cardRaw.locationRaw,
+              imageUrls: Array.isArray(refreshState.image_urls) ? refreshState.image_urls : cardRaw.imageUrls,
+              sellerRaw: refreshState.seller_raw ?? cardRaw.sellerRaw,
+              sourceMetadata: {
+                ...(cardRaw.sourceMetadata ?? {}),
+                postedDate: refreshState.posted_at ?? cardRaw.sourceMetadata?.postedDate,
+                cachedDetail: true
+              }
+            }
+          : cardRaw;
       if (needsDetail) {
         raw.sourceMetadata = { ...(raw.sourceMetadata ?? {}), detailFetched: true };
         summary.detailPagesOpened += 1;

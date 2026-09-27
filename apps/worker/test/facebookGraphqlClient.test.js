@@ -73,6 +73,25 @@ test("search parser extracts listing fields and posted time from feed nodes", ()
   assert.equal(result.listings[0].postedDate, new Date(1_757_000_000 * 1000).toISOString());
 });
 
+test("cursor-only Marketplace responses report the missing card fields without exposing listing data", () => {
+  const endCursor = JSON.stringify({ c2c: { sspi: ["listing-123"] } });
+  const result = parseSearchResponse({
+    data: { marketplace_search: { feed_units: {
+      edges: [{ node: { feed_unit: { id: "wrapper-1" } } }],
+      page_info: { end_cursor: endCursor, has_next_page: false }
+    } } }
+  });
+
+  assert.equal(result.listings.length, 1);
+  assert.equal(result.listings[0].title, "Marketplace listing");
+  assert.equal(result.diagnostics.edgeCount, 1);
+  assert.equal(result.diagnostics.richListingCount, 0);
+  assert.equal(result.diagnostics.cursorPlaceholderCount, 1);
+  assert.deepEqual(result.diagnostics.firstNodeKeys, ["feed_unit"]);
+  assert.ok(result.diagnostics.firstNodeFieldPaths.includes("node.feed_unit.id:string"));
+  assert.equal(JSON.stringify(result.diagnostics).includes("listing-123"), false);
+});
+
 test("listing detail uses the Marketplace GraphQL operation and normalizes its result", () => {
   const variables = buildListingDetailVariables("12345");
   assert.equal(variables.targetId, "12345");

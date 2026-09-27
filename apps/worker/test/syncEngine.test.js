@@ -112,6 +112,52 @@ test("placeholder search cards fetch details before being counted and saved", as
   assert.equal(saved[0].titleRaw, "2020 Chevrolet Corvette");
 });
 
+test("placeholder cards reuse saved listing data instead of re-fetching every known result", async () => {
+  const connector = makeConnector();
+  connector.captureListingCards = async () => ({
+    capturedAt: new Date(),
+    cards: [{
+      rank: 1,
+      sourceItemId: "existing-corvette",
+      listingUrl: "https://www.facebook.com/marketplace/item/existing-corvette/",
+      titleRaw: "Marketplace listing",
+      priceRaw: "",
+      locationRaw: "",
+      thumbnailUrl: "",
+      rawCardText: "Marketplace listing"
+    }]
+  });
+  const saved = [];
+  const dbOps = makeDbOps();
+  dbOps.getItemRefreshState = async () => ({
+    status: "new",
+    title_raw: "2020 Chevrolet Corvette",
+    description_raw: "Clean title, 25,000 miles",
+    price_raw: "$65,000",
+    location_raw: "San Jose",
+    image_urls: ["https://example.test/corvette.jpg"],
+    seller_raw: "Seller",
+    posted_at: new Date().toISOString(),
+    last_scraped_at: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()
+  });
+  dbOps.upsertRawItemSnapshot = async (_db, args) => {
+    saved.push(args.rawItem);
+    return { itemId: "existing-corvette-item", isNew: false };
+  };
+
+  const run = await runProfileSync({
+    db: {}, connector, profile: { id: "profile-corvette", query: "corvette", filtersJson: {} }, dbOps
+  });
+
+  assert.equal(run.status, "completed");
+  assert.equal(run.resultsFound, 1);
+  assert.equal(run.detailPagesOpened, 0);
+  assert.equal(connector.detailRequests, 0);
+  assert.equal(saved[0].titleRaw, "2020 Chevrolet Corvette");
+  assert.equal(saved[0].priceRaw, "$65,000");
+  assert.deepEqual(saved[0].imageUrls, ["https://example.test/corvette.jpg"]);
+});
+
 test("detail-dependent search filters still fetch listing details", async () => {
   const connector = makeConnector();
   const run = await runProfileSync({

@@ -200,6 +200,7 @@ export function parseSearchResponse(data, limit = 25) {
   const pageInfo = feedUnits?.page_info ?? {};
   const seen = new Set();
   const listingObjects = [];
+  let richListingCount = 0;
 
   function visit(value) {
     if (!value || typeof value !== "object") {
@@ -216,6 +217,7 @@ export function parseSearchResponse(data, limit = 25) {
     if (id && typeof title === "string" && title.trim() && !seen.has(`${id}`)) {
       seen.add(`${id}`);
       listingObjects.push(value);
+      richListingCount += 1;
     }
 
     for (const child of Object.values(value)) visit(child);
@@ -260,15 +262,32 @@ export function parseSearchResponse(data, limit = 25) {
   });
 
   const firstNode = edges[0]?.node;
-  const diagnostics = listings.length
-    ? undefined
-    : {
+  // Keep the diagnostic structural: Facebook payloads can contain private
+  // listing and seller data, so never attach raw values to run summaries.
+  function collectFieldPaths(value, prefix = "node", depth = 0, paths = []) {
+    if (!value || typeof value !== "object" || depth >= 4 || paths.length >= 40) return paths;
+    for (const [key, child] of Object.entries(value)) {
+      const path = `${prefix}.${key}`;
+      paths.push(`${path}:${Array.isArray(child) ? "array" : child === null ? "null" : typeof child}`);
+      if (paths.length >= 40) break;
+      if (child && typeof child === "object") collectFieldPaths(child, path, depth + 1, paths);
+    }
+    return paths;
+  }
+
+  const cursorPlaceholderCount = listingObjects.length - richListingCount;
+  const diagnostics = cursorPlaceholderCount > 0 || listings.length === 0
+    ? {
         graphqlDataKeys: Object.keys(data?.data ?? {}),
         feedUnitKeys: Object.keys(feedUnits ?? {}),
         edgeCount: edges.length,
+        richListingCount,
+        cursorPlaceholderCount,
         firstNodeKeys: Object.keys(firstNode ?? {}),
+        firstNodeFieldPaths: collectFieldPaths(firstNode),
         hasNextPage: pageInfo.has_next_page ?? false
-      };
+      }
+    : undefined;
 
   return {
     listings,
