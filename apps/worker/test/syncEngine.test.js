@@ -44,7 +44,7 @@ function makeConnector() {
         normalizedUrl: card.listingUrl,
         url: card.listingUrl,
         titleRaw: card.titleRaw,
-        descriptionRaw: card.rawCardText,
+        descriptionRaw: undefined,
         priceRaw: card.priceRaw,
         locationRaw: card.locationRaw,
         imageUrls: [card.thumbnailUrl],
@@ -61,7 +61,7 @@ function makeConnector() {
   };
 }
 
-test("ordinary GraphQL search completes without serial detail requests", async () => {
+test("new GraphQL listings are enriched with a real description", async () => {
   const connector = makeConnector();
   const run = await runProfileSync({
     db: {}, connector, profile: { id: "profile-1", query: "Civic", filtersJson: {} },
@@ -70,8 +70,32 @@ test("ordinary GraphQL search completes without serial detail requests", async (
 
   assert.equal(run.status, "completed");
   assert.equal(run.resultsFound, 1);
-  assert.equal(run.detailPagesOpened, 0);
-  assert.equal(connector.detailRequests, 0);
+  assert.equal(run.detailPagesOpened, 1);
+  assert.equal(connector.detailRequests, 1);
+});
+
+test("detail enrichment is bounded per run so the shared limiter can pace it safely", async () => {
+  const connector = makeConnector();
+  const [base] = (await connector.captureListingCards({})).cards;
+  connector.captureListingCards = async () => ({
+    capturedAt: new Date(),
+    cards: Array.from({ length: 7 }, (_, index) => ({
+      ...base,
+      rank: index + 1,
+      sourceItemId: `listing-${index + 1}`,
+      listingUrl: `https://www.facebook.com/marketplace/item/listing-${index + 1}/`
+    }))
+  });
+
+  const run = await runProfileSync({
+    db: {}, connector, profile: { id: "profile-1", query: "Civic", filtersJson: {} },
+    dbOps: makeDbOps()
+  });
+
+  assert.equal(run.status, "completed");
+  assert.equal(run.resultsFound, 7);
+  assert.equal(run.detailPagesOpened, 3);
+  assert.equal(connector.detailRequests, 3);
 });
 
 test("placeholder search cards fetch details before being counted and saved", async () => {
@@ -138,7 +162,7 @@ test("placeholder cards reuse saved listing data instead of re-fetching every kn
     image_urls: ["https://example.test/corvette.jpg"],
     seller_raw: "Seller",
     posted_at: new Date().toISOString(),
-    last_scraped_at: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()
+    last_scraped_at: new Date(Date.now() - 60 * 60 * 1000).toISOString()
   });
   dbOps.upsertRawItemSnapshot = async (_db, args) => {
     saved.push(args.rawItem);
@@ -191,13 +215,23 @@ test("title and year filters eliminate cards before detail requests", async () =
   assert.equal(connector.detailRequests, 0);
 });
 
-test("GraphQL HTTP search flows through connector and run persistence without detail calls", async (t) => {
+test("GraphQL HTTP search enriches a new listing and persists its description", async (t) => {
   const graphqlCalls = [];
   t.mock.method(globalThis, "fetch", async (url, options = {}) => {
     if (String(url).includes("/marketplace/")) {
       return new Response('<script>"DTSGInitData",[],{"token":"test-token"}</script>', { status: 200 });
     }
-    graphqlCalls.push(options.body);
+    const docId = new URLSearchParams(options.body).get("doc_id");
+    graphqlCalls.push(docId);
+    if (docId === "26924013917190310") {
+      return new Response(JSON.stringify({ data: { viewer: { marketplace_product_details_page: { target: {
+        id: "listing-graphql-1",
+        marketplace_listing_title: "2015 Honda Civic Si",
+        redacted_description: { text: "Manual transmission; clean title; 72,000 miles" },
+        listing_price: { formatted_amount: "$12,000" },
+        primary_listing_photo: { image: { uri: "https://example.test/car.jpg" } }
+      } } } } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
     return new Response(JSON.stringify({ data: { marketplace_search: { feed_units: {
       edges: [{ node: { listing: {
         id: "listing-graphql-1",
@@ -227,10 +261,70 @@ test("GraphQL HTTP search flows through connector and run persistence without de
     dbOps
   });
 
-  assert.equal(graphqlCalls.length, 1, "a routine run sends only the search GraphQL operation");
+  assert.deepEqual(graphqlCalls, ["7111939778879383", "26924013917190310"]);
   assert.equal(run.status, "completed");
   assert.equal(run.resultsFound, 1);
-  assert.equal(run.detailPagesOpened, 0);
+  assert.equal(run.detailPagesOpened, 1);
   assert.equal(persisted[0].sourceItemId, "listing-graphql-1");
   assert.equal(persisted[0].imageUrls[0], "https://example.test/car.jpg");
+  assert.equal(persisted[0].descriptionRaw, "Manual transmission; clean title; 72,000 miles");
+});
+
+test("placeholder GraphQL response falls back to Marketplace cards and enriches new results", async (t) => {
+  let graphqlCalls = 0;
+  let pageCalls = 0;
+  t.mock.method(globalThis, "fetch", async (url, options = {}) => {
+    const requestUrl = new URL(url);
+    if (requestUrl.pathname === "/marketplace/search/") {
+      pageCalls += 1;
+      return new Response(`<a href="/marketplace/item/998877/?ref=search"><img src="https://images.example.test/corvette.jpg"><span>2007 Chevrolet Corvette Coupe 2D</span><span>$18,000</span><span>Lafayette, CA</span></a>`, {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      });
+    }
+    if (requestUrl.pathname === "/marketplace/") {
+      return new Response('<script>"DTSGInitData",[],{"token":"test-token"}</script>', { status: 200 });
+    }
+    graphqlCalls += 1;
+    const docId = new URLSearchParams(options.body).get("doc_id");
+    if (docId === "26924013917190310") {
+      return new Response(JSON.stringify({ data: { viewer: { marketplace_product_details_page: { target: {
+        id: "998877",
+        marketplace_listing_title: "2007 Chevrolet Corvette Coupe 2D",
+        redacted_description: { text: "Clean title and 48,000 miles" },
+        listing_price: { formatted_amount: "$18,000" }
+      } } } } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ data: { marketplace_search: { feed_units: {
+      edges: [{ node: { id: "feed-wrapper" } }],
+      page_info: { end_cursor: JSON.stringify({ c2c: { sspi: ["998877"] } }), has_next_page: true }
+    } } } }), { status: 200, headers: { "content-type": "application/json" } });
+  });
+
+  const connector = createFacebookConnector({ mode: "facebook_graphql", maxCardsPerRun: 25 });
+  connector.client.scheduleRequest = (request) => request();
+  const persisted = [];
+  const dbOps = makeDbOps();
+  dbOps.upsertRawItemSnapshot = async (_db, args) => {
+    persisted.push(args.rawItem);
+    return { itemId: "item-998877", isNew: true };
+  };
+  const run = await runProfileSync({
+    db: {}, connector,
+    profile: {
+      id: "profile-corvette", query: "corvette", location: "San Jose, CA", radiusMiles: 25,
+      filtersJson: { latitude: 37.3, longitude: -121.9 }
+    },
+    dbOps
+  });
+
+  assert.equal(graphqlCalls, 2);
+  assert.equal(pageCalls, 1);
+  assert.equal(run.status, "completed");
+  assert.equal(run.resultsFound, 1);
+  assert.equal(run.detailPagesOpened, 1);
+  assert.equal(persisted[0].sourceItemId, "998877");
+  assert.equal(persisted[0].titleRaw, "2007 Chevrolet Corvette Coupe 2D");
+  assert.deepEqual(persisted[0].imageUrls, ["https://images.example.test/corvette.jpg"]);
+  assert.equal(persisted[0].descriptionRaw, "Clean title and 48,000 miles");
 });

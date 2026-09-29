@@ -1080,6 +1080,11 @@ export async function getListingById(db, itemId) {
   };
 }
 
+export async function deleteListing(db, itemId) {
+  const result = await db.pool.query("DELETE FROM items WHERE id = $1 RETURNING id", [itemId]);
+  return result.rows.length > 0;
+}
+
 export async function updateListingStatus(db, itemId, status) {
   const allowedStatuses = new Set(["new", "watching", "saved", "contacted", "rejected", "sold", "possibly_gone", "hidden"]);
   if (!allowedStatuses.has(status)) {

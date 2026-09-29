@@ -37,6 +37,7 @@ function buildConnector(config) {
     facebookCookie: config.facebookCookie,
     facebookMaxRequestsPerMinute: config.facebookMaxRequestsPerMinute,
     facebookUserAgent: config.facebookUserAgent,
+    facebookSearchBaseUrl: config.facebookSearchBaseUrl,
     maxCardsPerRun: config.maxCardsPerRun,
     chromeProfile: config.chromeProfile
   });
@@ -47,6 +48,7 @@ function buildFacebookGraphqlClient(config) {
     facebookCookie: config.facebookCookie,
     facebookMaxRequestsPerMinute: config.facebookMaxRequestsPerMinute,
     facebookUserAgent: config.facebookUserAgent,
+    facebookSearchBaseUrl: config.facebookSearchBaseUrl,
     chromeProfile: config.chromeProfile
   });
 }

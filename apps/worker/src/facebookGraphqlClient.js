@@ -6,6 +6,7 @@ import path from "node:path";
 
 const GRAPHQL_URL = "https://www.facebook.com/api/graphql/";
 const MARKETPLACE_URL = "https://www.facebook.com/marketplace/";
+const MARKETPLACE_SEARCH_URL = "https://www.facebook.com/marketplace/search/";
 const MARKETPLACE_SEARCH_DOC_ID = "7111939778879383";
 const LOCATION_SEARCH_DOC_ID = "5585904654783609";
 const LISTING_DETAIL_DOC_ID = "26924013917190310";
@@ -92,7 +93,8 @@ async function extractChromeCookies(domain, profile) {
           tmpPath,
           `SELECT host_key, name, value, hex(encrypted_value) AS encrypted_value_hex, path, expires_utc, is_secure, is_httponly
            FROM cookies
-           WHERE host_key LIKE '%${domain.replace(/'/g, "''")}';`
+          WHERE host_key LIKE '%${domain.replace(/'/g, "''")}'
+            AND (expires_utc = 0 OR expires_utc > (strftime('%s','now') + 11644473600) * 1000000);`
         ],
         { encoding: "utf8" }
       )
@@ -201,6 +203,7 @@ export function parseSearchResponse(data, limit = 25) {
   const seen = new Set();
   const listingObjects = [];
   let richListingCount = 0;
+  let cursorPlaceholderCount = 0;
 
   function visit(value) {
     if (!value || typeof value !== "object") {
@@ -234,7 +237,13 @@ export function parseSearchResponse(data, limit = 25) {
       for (const id of cursorListingIds) {
         if (!id || seen.has(`${id}`)) continue;
         seen.add(`${id}`);
-        listingObjects.push({ id: `${id}`, marketplace_listing_title: "Marketplace listing" });
+        cursorPlaceholderCount += 1;
+        // Cursor-only IDs are useful to detect an incomplete response, but
+        // they are not listing cards. Keep them only when there are no real
+        // edge cards so the HTML fallback can recover those results.
+        if (richListingCount === 0) {
+          listingObjects.push({ id: `${id}`, marketplace_listing_title: "Marketplace listing" });
+        }
       }
     } catch {
       // Facebook may change the cursor encoding; parsed feed nodes remain usable.
@@ -275,7 +284,6 @@ export function parseSearchResponse(data, limit = 25) {
     return paths;
   }
 
-  const cursorPlaceholderCount = listingObjects.length - richListingCount;
   const diagnostics = cursorPlaceholderCount > 0 || listings.length === 0
     ? {
         graphqlDataKeys: Object.keys(data?.data ?? {}),
@@ -295,6 +303,62 @@ export function parseSearchResponse(data, limit = 25) {
     endCursor: pageInfo.end_cursor ?? null,
     ...(diagnostics ? { diagnostics } : {})
   };
+}
+
+function decodeHtml(value) {
+  return `${value ?? ""}`
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&#x27;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
+}
+
+function stripHtml(value) {
+  return decodeHtml(`${value ?? ""}`
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([\da-f]+);/gi, (_, code) => String.fromCodePoint(parseInt(code, 16))))
+    .replace(/\s+/g, " ").trim();
+}
+
+export function parseMarketplaceSearchHtml(html, limit = 25) {
+  const listings = [];
+  const seen = new Set();
+  const anchorPattern = /<a\b([^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*)>([\s\S]*?)<\/a\s*>/gi;
+  let match;
+  while (listings.length < limit && (match = anchorPattern.exec(html))) {
+    const href = decodeHtml(match[2] ?? match[3] ?? "");
+    const id = href.match(/\/marketplace\/item\/(\d+)/)?.[1];
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+
+    const markup = match[4];
+    const text = stripHtml(markup);
+    const priceMatch = text.match(/\$\s?[\d,]+(?:\.\d{2})?/);
+    const price = priceMatch?.[0].replace(/\s+/g, "") ?? "";
+    const beforePrice = priceMatch ? text.slice(0, priceMatch.index).trim() : text;
+    const title = beforePrice || `Marketplace listing ${id}`;
+    const afterPrice = priceMatch ? text.slice(priceMatch.index + priceMatch[0].length).trim() : "";
+    const location = afterPrice.match(/(?:reduced from\s+\$[\d,.]+\s*)?(.+?,\s*[A-Z]{2})\s*$/i)?.[1]?.trim() ?? "";
+    const imageMatch = markup.match(/<(?:img|image)\b[^>]*\b(?:src|data-src)\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
+    const imageUrl = decodeHtml(imageMatch?.[1] ?? imageMatch?.[2] ?? "");
+    const listingUrl = `https://www.facebook.com/marketplace/item/${id}/`;
+    listings.push({
+      id,
+      title,
+      price,
+      location,
+      imageUrl,
+      sellerName: "",
+      postedDate: "",
+      url: listingUrl,
+      isPending: false,
+      raw: { captureMode: "marketplace_search_page", cardText: text }
+    });
+  }
+  return listings;
 }
 
 function decodeHtmlEntities(value) {
@@ -575,6 +639,7 @@ export class FacebookGraphqlClient {
     this.chromeProfile = options.chromeProfile ?? "Default";
     this.useChromeCookies = options.useChromeCookies ?? process.env.FB_USE_CHROME_COOKIES === "true";
     this.userAgent = options.facebookUserAgent ?? DEFAULT_USER_AGENT;
+    this.searchBaseUrl = options.facebookSearchBaseUrl ?? MARKETPLACE_SEARCH_URL;
     this.session = null;
     this.reqCounter = 0;
     this.requestsPerMinute = Number(options.facebookMaxRequestsPerMinute ?? process.env.FB_MAX_REQUESTS_PER_MINUTE ?? 10);
@@ -611,6 +676,13 @@ export class FacebookGraphqlClient {
     }
 
     const userId = getCookieValue(cookies, "c_user");
+    const sessionCookie = getCookieValue(cookies, "xs");
+    if ((this.cookieHeader || this.useChromeCookies) && (!userId || !sessionCookie)) {
+      const source = this.useChromeCookies && !this.cookieHeader
+        ? `Chrome profile "${this.chromeProfile}" is not signed into Facebook. Sign in to Facebook in that Chrome profile, then rerun the local search.`
+        : "FB_COOKIE must include an active Facebook session (c_user and xs cookies).";
+      throw new Error(source);
+    }
     // Logged-out Marketplace requests use page tokens without account cookies.
 
     const tokens = await this.extractTokens(cookieHeader);
@@ -645,6 +717,12 @@ export class FacebookGraphqlClient {
     }
 
     const html = await response.text();
+    const finalPath = (() => {
+      try { return new URL(response.url).pathname; } catch { return ""; }
+    })();
+    if (/\/(?:login|checkpoint)(?:\/|$)/i.test(finalPath) || /id=["']login_form["']/i.test(html)) {
+      throw new Error("Facebook redirected the Marketplace session to login. Sign in to Facebook and retry the search.");
+    }
     const fbDtsg =
       html.match(/"DTSGInitData"\s*,\s*\[\]\s*,\s*\{"token"\s*:\s*"([^"]+)"/)?.[1] ??
       html.match(/"DTSGInitialData"\s*,\s*\[\]\s*,\s*\{"token"\s*:\s*"([^"]+)"/)?.[1] ??
@@ -676,6 +754,9 @@ export class FacebookGraphqlClient {
       doc_id: docId,
       variables: JSON.stringify(variables),
       __a: "1",
+      // Marketplace search currently returns cursor-only placeholder IDs when
+      // the browser's Comet request context is omitted, even with HTTP 200.
+      __comet_req: "15",
       __req: this.reqCounter.toString(36),
       __rev: session.clientRevision
     });
@@ -728,7 +809,61 @@ export class FacebookGraphqlClient {
 
   async searchListings(params) {
     const data = await this.graphqlRequest(MARKETPLACE_SEARCH_DOC_ID, buildSearchVariables(params));
-    return parseSearchResponse(data, params.limit);
+    const result = parseSearchResponse(data, params.limit);
+    // Facebook can return complete edge cards and also repeat their IDs in the
+    // pagination cursor. Only fall back when there are placeholders but no
+    // rich cards to use; otherwise the extra cursor IDs needlessly trigger a
+    // slow page fetch and replace correctly parsed GraphQL results.
+    if (result.diagnostics?.cursorPlaceholderCount > 0 && result.diagnostics.richListingCount === 0) {
+      const session = await this.ensureSession();
+      const searchUrl = new URL(params.searchUrl || this.searchBaseUrl);
+      if (searchUrl.protocol !== "https:" || !/(^|\.)facebook\.com$/i.test(searchUrl.hostname) || !searchUrl.pathname.startsWith("/marketplace/")) {
+        throw new Error("FB_SEARCH_BASE_URL and profile search URLs must point to a Facebook Marketplace page.");
+      }
+      searchUrl.searchParams.set("query", params.query);
+      if (params.minPrice !== undefined) searchUrl.searchParams.set("minPrice", `${params.minPrice}`);
+      if (params.maxPrice !== undefined) searchUrl.searchParams.set("maxPrice", `${params.maxPrice}`);
+      if (params.radiusKm !== undefined) searchUrl.searchParams.set("radius", `${Math.round(params.radiusKm / 1.60934)}`);
+      if (params.location) searchUrl.searchParams.set("location", params.location);
+      if (params.latitude !== undefined) searchUrl.searchParams.set("latitude", `${params.latitude}`);
+      if (params.longitude !== undefined) searchUrl.searchParams.set("longitude", `${params.longitude}`);
+
+      const response = await this.request(searchUrl, {
+        headers: {
+          ...BROWSER_HEADERS,
+          "user-agent": this.userAgent,
+          cookie: session.cookieHeader,
+          accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "same-origin"
+        },
+        redirect: "follow"
+      });
+      if (!response.ok) throw new Error(`Marketplace search page returned HTTP ${response.status}.`);
+      const html = await response.text();
+      const finalUrl = response.url ? new URL(response.url) : searchUrl;
+      if (!/(^|\.)facebook\.com$/i.test(finalUrl.hostname)) throw new Error("Marketplace search redirected away from Facebook.");
+      const finalPath = finalUrl.pathname;
+      if (/\/(?:login|checkpoint)(?:\/|$)/i.test(finalPath) || /id=["']login_form["']/i.test(html)) {
+        this.session = null;
+        throw new Error("Facebook redirected the Marketplace search to login. Sign in and retry the search.");
+      }
+      const pageListings = parseMarketplaceSearchHtml(html, params.limit);
+      if (pageListings.length) {
+        return {
+          listings: pageListings,
+          hasNextPage: result.hasNextPage,
+          endCursor: result.endCursor,
+          diagnostics: { ...result.diagnostics, cardSource: "marketplace_search_page", pageCardCount: pageListings.length }
+        };
+      }
+      throw new Error("Facebook GraphQL returned placeholder listing IDs and the Marketplace search page contained no listing cards.");
+    }
+    if (result.listings.length === 0 && result.hasNextPage) {
+      throw new Error("Facebook returned an empty Marketplace feed while reporting more pages. The search response is incomplete; verify the Facebook session and Marketplace GraphQL response before treating this run as successful.");
+    }
+    return result;
   }
 
   async getListingDetail(listingId, { fetchPhotos = true } = {}) {

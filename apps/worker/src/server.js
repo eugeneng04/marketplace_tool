@@ -12,6 +12,7 @@ import {
   createSearchGroup,
   createVehicleGeneration,
   deleteComp,
+  deleteListing,
   deleteProfile,
   getListingById,
   getProfile,
@@ -156,6 +157,7 @@ function buildConnector(config) {
     facebookCookie: config.facebookCookie,
     facebookMaxRequestsPerMinute: config.facebookMaxRequestsPerMinute,
     facebookUserAgent: config.facebookUserAgent,
+    facebookSearchBaseUrl: config.facebookSearchBaseUrl,
     maxCardsPerRun: config.maxCardsPerRun,
     chromeProfile: config.chromeProfile
   });
@@ -166,6 +168,7 @@ function buildFacebookGraphqlClient(config) {
     facebookCookie: config.facebookCookie,
     facebookMaxRequestsPerMinute: config.facebookMaxRequestsPerMinute,
     facebookUserAgent: config.facebookUserAgent,
+    facebookSearchBaseUrl: config.facebookSearchBaseUrl,
     chromeProfile: config.chromeProfile
   });
 }
@@ -657,6 +660,13 @@ export async function createApp() {
           return sendJson(res, 404, { error: "Comp not found" });
         }
         return sendJson(res, 200, { deleted: true, compId });
+      }
+
+      if (/^\/listings\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+        const itemId = decodeURIComponent(pathname.slice("/listings/".length));
+        const deleted = await deleteListing(db, itemId);
+        if (!deleted) return sendJson(res, 404, { error: "Listing not found" });
+        return sendJson(res, 200, { deleted: true, itemId });
       }
 
       if (pathname.startsWith("/listings/") && req.method === "GET") {

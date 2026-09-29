@@ -76,6 +76,7 @@ export function loadConfig(env = process.env) {
     schedulerToken: mergedEnv.SCHEDULER_TOKEN ?? "",
     connectorMode: mergedEnv.CONNECTOR_MODE ?? "mock",
     facebookCookie: mergedEnv.FB_COOKIE ?? "",
+    facebookSearchBaseUrl: mergedEnv.FB_SEARCH_BASE_URL ?? "https://www.facebook.com/marketplace/search/",
     facebookMaxRequestsPerMinute: Number(mergedEnv.FB_MAX_REQUESTS_PER_MINUTE ?? 10),
     facebookUserAgent:
       mergedEnv.FB_USER_AGENT ??

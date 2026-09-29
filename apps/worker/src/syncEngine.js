@@ -14,6 +14,9 @@ import { parseVehicleListing } from "./vehicleParser.js";
 
 const DEFAULT_STALE_DETAIL_HOURS = 24;
 const DETAIL_FETCH_CONCURRENCY = 5;
+// Marketplace detail is one extra GraphQL call per listing. Drip it over
+// consecutive runs so search results stay useful without firing a burst.
+const DETAIL_FETCH_LIMIT_PER_RUN = 3;
 
 function cardNeedsDetail(card) {
   return !card.titleRaw || /^Marketplace listing(?:\s|$)/i.test(card.titleRaw.trim());
@@ -48,7 +51,7 @@ function hoursSince(value) {
   return (Date.now() - timestamp) / 3_600_000;
 }
 
-export function shouldFetchDetail(refreshState, staleDetailHours) {
+export function shouldFetchDetail(refreshState, staleDetailHours, { descriptionIsCardSummary = false } = {}) {
   if (!refreshState) {
     return true;
   }
@@ -57,7 +60,7 @@ export function shouldFetchDetail(refreshState, staleDetailHours) {
     return false;
   }
 
-  const hasDescription = typeof refreshState.description_raw === "string" && refreshState.description_raw.trim().length > 0;
+  const hasDescription = typeof refreshState.description_raw === "string" && refreshState.description_raw.trim().length > 0 && !descriptionIsCardSummary;
   const hasImages = Array.isArray(refreshState.image_urls) && refreshState.image_urls.length > 0;
   const priceFromText = parsePrice(refreshState.price_raw);
   const priceMismatch = priceFromText !== null && refreshState.current_price !== null && priceFromText !== refreshState.current_price;
@@ -129,6 +132,7 @@ export async function runProfileSync({ db, connector, profile, preferManualTrans
   try {
     const captured = await connector.captureListingCards(profile);
     summary.diagnostics = captured.sourceMetadata?.diagnostics ?? null;
+    let detailFetchesScheduled = 0;
 
     const preparedItems = await mapWithConcurrency(captured.cards, DETAIL_FETCH_CONCURRENCY, async (card) => {
       const cardRaw = connector.normalizeCardToRawSourceItem(card, captured.capturedAt);
@@ -158,20 +162,28 @@ export async function runProfileSync({ db, connector, profile, preferManualTrans
         return { card, raw: cardRaw, skipped: true };
       }
 
-      // The GraphQL search response is enough to capture ordinary search
-      // results. Detail requests are individually rate limited and were making
-      // a 25-result run take several minutes. Fetch details during the run only
-      // when filters depend on fields the search response may omit. Existing
-      // incomplete/stale items remain eligible for the normal refresh policy.
+      // Search cards contain photos and basic fields, but not seller
+      // descriptions. Enrich a small number of new/incomplete cards each run;
+      // the shared request limiter paces them and saved detail data prevents
+      // repeated calls on subsequent runs.
       const filters = profile.filtersJson ?? {};
       const detailDependentFilters = Boolean(
         filters.transmission || filters.maxMileage || filters.cleanTitleOnly || filters.modifiedOnly
       );
-      const needsDetail = shouldFetchDetail(refreshState, staleDetailHours) &&
-        ((needsCardEnrichment && !hasCachedListing) || detailDependentFilters || Boolean(refreshState && !needsCardEnrichment && (
-          hoursSince(refreshState.last_scraped_at) >= staleDetailHours ||
-          !refreshState.description_raw?.trim() || !refreshState.image_urls?.length
-        )));
+      const descriptionIsCardSummary = Boolean(
+        refreshState?.description_raw?.trim() && card.rawCardText?.trim() &&
+        refreshState.description_raw.trim() === card.rawCardText.trim()
+      );
+      const detailIntervalHours = ["saved", "contacted"].includes(refreshState?.status)
+        ? Math.min(staleDetailHours, 12)
+        : staleDetailHours;
+      const detailRefreshDue = !refreshState || hoursSince(refreshState.last_scraped_at) >= detailIntervalHours;
+      const needsDetail = detailFetchesScheduled < DETAIL_FETCH_LIMIT_PER_RUN && detailRefreshDue &&
+        shouldFetchDetail(refreshState, staleDetailHours, { descriptionIsCardSummary }) &&
+        ((!refreshState) || (needsCardEnrichment && !hasCachedListing) || detailDependentFilters ||
+          hoursSince(refreshState.last_scraped_at) >= detailIntervalHours ||
+          descriptionIsCardSummary || !refreshState.description_raw?.trim() || !refreshState.image_urls?.length);
+      if (needsDetail) detailFetchesScheduled += 1;
       const raw = needsDetail
         ? await connector.fetchListingDetail(card)
         : hasCachedListing

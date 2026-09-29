@@ -234,9 +234,16 @@ async function api(path, options = {}) {
     })
   });
   const text = await response.text();
-  const data = text ? JSON.parse(text) : {};
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`Server returned an unexpected response (HTTP ${response.status}). Please try again shortly.`);
+  }
   if (!response.ok) {
-    throw new Error(data.error || `HTTP ${response.status}`);
+    throw new Error(response.status === 401
+      ? "Connection expired or access token missing. Open App access and connect again."
+      : data.error || `HTTP ${response.status}`);
   }
   return data;
 }
@@ -311,7 +318,7 @@ async function saveSearchDefaults(event) {
 }
 
 async function loadGroups() {
-  try { state.groups = (await api("/search-groups")).groups ?? []; } catch { state.groups = []; }
+  state.groups = (await api("/search-groups")).groups ?? [];
   const selector = $("#profileGroupInput");
   if (selector) {
     const selected = selector.value;
@@ -354,22 +361,14 @@ async function loadRuns() {
 }
 
 async function loadDeals() {
-  try {
-    const data = await api("/deals?limit=10");
-    state.deals = data.deals ?? [];
-  } catch {
-    state.deals = [];
-  }
+  const data = await api("/deals?limit=10");
+  state.deals = data.deals ?? [];
   renderDeals();
 }
 
 async function loadAlerts() {
-  try {
-    const data = await api("/alerts?limit=20");
-    state.alerts = data.alerts ?? [];
-  } catch {
-    state.alerts = [];
-  }
+  const data = await api("/alerts?limit=20");
+  state.alerts = data.alerts ?? [];
   renderAlerts();
 }
 
@@ -379,11 +378,74 @@ async function markAlertRead(alertId) {
   await loadAlerts();
 }
 
+function showActionStatus(id, message) {
+  const node = $(id);
+  node.textContent = message;
+  node.hidden = !message;
+}
+
+async function reloadSearchResults() {
+  const results = await Promise.allSettled([loadListings(), loadRuns(), loadDeals(), loadAlerts()]);
+  return results.filter((result) => result.status === "rejected").map((result) => result.reason.message);
+}
+
 async function refreshAll() {
+  const button = $("#refreshButton");
+  if (button.disabled) return;
+  button.disabled = true;
+  button.textContent = "Refreshing…";
+  showActionStatus("#refreshStatus", "Refreshing saved data…");
   try {
-    await Promise.all([loadProfiles(), loadGroups(), loadListings(), loadRuns(), loadDeals(), loadAlerts(), loadSearchDefaults(), loadVehicleGenerations()]);
+    const results = await Promise.allSettled([loadProfiles(), loadGroups(), loadListings(), loadRuns(), loadDeals(), loadAlerts(), loadSearchDefaults(), loadVehicleGenerations()]);
+    const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason.message);
+    showActionStatus("#refreshStatus", errors.length
+      ? `Refresh incomplete: ${[...new Set(errors)].join("; ")}`
+      : "Saved data refreshed. Use Run all saved to search Facebook for new listings.");
+  } finally {
+    button.disabled = false;
+    button.textContent = "Refresh";
+  }
+}
+
+async function runAllSaved() {
+  const button = $("#syncAllButton");
+  if (button.disabled) return;
+  button.disabled = true;
+  button.textContent = "Starting…";
+  showActionStatus("#syncStatus", "Loading saved searches…");
+  try {
+    await loadProfiles();
+    const profiles = state.profiles.filter((profile) => profile.enabled);
+    if (!profiles.length) {
+      showActionStatus("#syncStatus", "No enabled saved searches. Save or enable a search in My Searches first.");
+      return;
+    }
+    let completed = 0;
+    let newItems = 0;
+    const failures = [];
+    const refreshErrors = new Set();
+    for (const [index, profile] of profiles.entries()) {
+      const name = profile.name || profile.query;
+      button.textContent = `Running ${index + 1}/${profiles.length}…`;
+      showActionStatus("#syncStatus", `Searching ${index + 1} of ${profiles.length}: ${name}.`);
+      try {
+        const data = await api(`/profiles/${encodeURIComponent(profile.id)}/run`, { method: "POST" });
+        if (data.run?.status === "failed") throw new Error(data.run.errorMessage || "Search failed");
+        completed += 1;
+        newItems += data.run?.newItems ?? 0;
+      } catch (error) {
+        failures.push(`${name}: ${error.message}`);
+      }
+      for (const message of await reloadSearchResults()) refreshErrors.add(message);
+    }
+    showActionStatus("#syncStatus", `${completed} of ${profiles.length} searches completed. ${newItems} new listings.`
+      + (failures.length ? ` Failed searches: ${failures.join("; ")}` : "")
+      + (refreshErrors.size ? ` Could not refresh all results: ${[...refreshErrors].join("; ")}` : ""));
   } catch (error) {
-    toast(error.message);
+    showActionStatus("#syncStatus", `Could not run saved searches: ${error.message}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Run all saved";
   }
 }
 
@@ -466,6 +528,7 @@ function renderListings() {
                 <button class="status-button" data-set-status="${listing.id}" data-status="watching" type="button">Watch</button>
                 <button class="status-button" data-set-status="${listing.id}" data-status="saved" type="button">Save</button>
                 <button class="status-button" data-set-status="${listing.id}" data-status="rejected" type="button">Reject</button>
+                <button class="status-button" data-delete-listing="${listing.id}" type="button">Delete</button>
               </div>
             </td>
           </tr>
@@ -658,6 +721,7 @@ function renderDetail(payload) {
       </div>
       <div class="detail-actions">
         ${item.status ? statusPill(item.status) : ""}
+        ${item.id && item.status ? `<button class="status-button" data-delete-listing="${escapeHtml(item.id)}" type="button">Delete listing</button>` : ""}
         ${payload.generation ? `<span class="tag">${escapeHtml(payload.generation.code)} generation</span>` : ""}
         ${item.url ? `<a class="secondary-button" href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">Open</a>` : ""}
       </div>
@@ -880,13 +944,15 @@ async function runProfile(profileId, button) {
     button.disabled = true;
     button.textContent = "Running...";
   }
-  toast("Search running. Fetching listing details...");
+  toast("Searching Facebook Marketplace...");
   try {
     const data = await api(`/profiles/${profileId}/run`, { method: "POST" });
     const found = data.run.resultsFound ?? 0;
     const diagnostic = data.run.diagnostics;
     toast(
-      found === 0 && diagnostic
+      diagnostic?.cursorPlaceholderCount > 0
+        ? `Facebook returned ${diagnostic.cursorPlaceholderCount} listing IDs without card fields; loaded ${data.run.detailPagesOpened ?? 0} details.`
+        : found === 0 && diagnostic
         ? `No listings parsed (feed edges: ${diagnostic.edgeCount ?? 0}). Check the Facebook response format.`
         : `Run finished: ${found} results, ${data.run.newItems ?? 0} new, ${data.run.alertsCreated ?? 0} alerts`
     );
@@ -896,6 +962,20 @@ async function runProfile(profileId, button) {
       button.disabled = false;
       button.textContent = originalLabel;
     }
+  }
+}
+
+async function removeListing(itemId, button) {
+  if (!window.confirm("Delete this listing from Resale Intelligence? Its saved history, comps, and alerts will also be removed. This cannot be undone. The Facebook listing is unaffected, and a later search may import it again.")) return;
+  button.disabled = true;
+  try {
+    await api(`/listings/${encodeURIComponent(itemId)}`, { method: "DELETE" });
+    if (activeDetailItemId === itemId) closeListingDetail();
+    attemptedAutomaticCompFetches.delete(itemId);
+    toast("Listing deleted");
+    await Promise.all([loadListings(), loadDeals(), loadAlerts()]);
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -1055,15 +1135,7 @@ function bindEvents() {
       $("#healthStatus").textContent = error.message;
     }
   });
-  $("#syncAllButton").addEventListener("click", async () => {
-    try {
-      const data = await api("/sync/all", { method: "POST" });
-      toast(`Ran ${data.count ?? 0} enabled profiles`);
-      await Promise.all([loadListings(), loadRuns(), loadDeals(), loadAlerts()]);
-    } catch (error) {
-      toast(error.message);
-    }
-  });
+  $("#syncAllButton").addEventListener("click", runAllSaved);
   $("#profileForm").addEventListener("submit", saveProfile);
   $("#searchDefaultsForm").addEventListener("submit", saveSearchDefaults);
   $("#generationForm").addEventListener("submit", async (event) => {
@@ -1241,6 +1313,7 @@ function bindEvents() {
       }
       if (target.dataset.facebookDetail) await showFacebookDetail(target.dataset.facebookDetail);
       if (target.dataset.setStatus) await updateStatus(target.dataset.setStatus, target.dataset.status);
+      if (target.dataset.deleteListing) await removeListing(target.dataset.deleteListing, target);
       if (target.dataset.markAlertRead) await markAlertRead(target.dataset.markAlertRead);
       if (target.dataset.locationLat) {
         $("#facebookLatitudeInput").value = target.dataset.locationLat;

@@ -154,7 +154,7 @@ export function detailToRawSourceItem(detail, card) {
     url,
     normalizedUrl: normalizeUrl(url),
     titleRaw: detail.title || cardTitle || `Marketplace listing ${sourceItemId ?? "unknown"}`,
-    descriptionRaw: detail.description || card?.rawCardText || undefined,
+    descriptionRaw: detail.description || undefined,
     priceRaw: detail.price || card?.priceRaw || undefined,
     locationRaw: detail.location || card?.locationRaw || undefined,
     imageUrls: detail.images?.length ? detail.images : [detail.imageUrl || card?.thumbnailUrl].filter(Boolean),
@@ -177,6 +177,7 @@ export function createFacebookGraphqlClient(options = {}) {
     facebookCookie: options.facebookCookie,
     facebookMaxRequestsPerMinute: options.facebookMaxRequestsPerMinute,
     facebookUserAgent: options.facebookUserAgent,
+    facebookSearchBaseUrl: options.facebookSearchBaseUrl,
     chromeProfile: options.chromeProfile || "Default"
   });
 }
@@ -185,6 +186,7 @@ export function createFacebookGraphqlConnector({
   facebookCookie,
   facebookMaxRequestsPerMinute,
   facebookUserAgent,
+  facebookSearchBaseUrl,
   maxCardsPerRun,
   chromeProfile
 }) {
@@ -192,6 +194,7 @@ export function createFacebookGraphqlConnector({
     facebookCookie,
     facebookMaxRequestsPerMinute,
     facebookUserAgent,
+    facebookSearchBaseUrl,
     chromeProfile
   });
 
@@ -210,6 +213,8 @@ export function createFacebookGraphqlConnector({
         minPrice: profile.minPrice ?? undefined,
         maxPrice: profile.maxPrice ?? undefined,
         category: profile.filtersJson?.facebookCategoryId,
+        searchUrl: profile.filtersJson?.searchUrl,
+        location: profile.location,
         limit: maxCardsPerRun
       });
 
@@ -248,7 +253,9 @@ export function createFacebookGraphqlConnector({
         url: card.listingUrl,
         normalizedUrl: normalizeUrl(card.listingUrl),
         titleRaw: card.titleRaw,
-        descriptionRaw: card.rawCardText,
+        // Search cards contain no seller description; keep this unset so the
+        // sync engine knows that detail enrichment is still needed.
+        descriptionRaw: undefined,
         priceRaw: card.priceRaw,
         locationRaw: card.locationRaw,
         imageUrls: [card.thumbnailUrl].filter(Boolean),
@@ -269,6 +276,7 @@ export function createFacebookConnector(options = {}) {
     facebookCookie = "",
     facebookMaxRequestsPerMinute,
     facebookUserAgent,
+    facebookSearchBaseUrl,
     maxCardsPerRun = 25,
     chromeProfile = "Default"
   } = options;
@@ -282,6 +290,7 @@ export function createFacebookConnector(options = {}) {
       facebookCookie,
       facebookMaxRequestsPerMinute,
       facebookUserAgent,
+      facebookSearchBaseUrl,
       maxCardsPerRun,
       chromeProfile
     });
