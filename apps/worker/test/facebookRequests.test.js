@@ -66,9 +66,21 @@ test('page and GraphQL calls use the same limiter and rejection clears the sessi
       : new Response('"DTSGInitData",[],{"token":"page-token"}');
   });
   const client = new FacebookGraphqlClient({useChromeCookies:false,scheduleRequest:clock.schedule});
-  await assert.rejects(client.searchListings({query:'car',latitude:1,longitude:2,limit:1}), /123: Query denied/);
+  await assert.rejects(client.searchListings({query:'car',latitude:1,longitude:2,limit:1}), /123: Query denied.*Rejected operation: Marketplace search/);
   assert.deepEqual(requests.map(r => r.time),[0,6000]);
   assert.equal(client.session,null);
+});
+
+test('GraphQL cooldown error names the operation Facebook rejected', async t => {
+  const clock = fakeLimiter();
+  t.mock.method(globalThis, 'fetch', async url => String(url).includes('/api/graphql/')
+    ? new Response('for (;;);'+JSON.stringify({errors:[{code:1675004,message:'Rate limit exceeded'}]}), {headers:{'content-type':'application/json'}})
+    : new Response('"DTSGInitData",[],{"token":"page-token"}'));
+  const client = new FacebookGraphqlClient({useChromeCookies:false,scheduleRequest:clock.schedule});
+  await assert.rejects(
+    client.searchListings({query:'car',latitude:1,longitude:2,limit:1}),
+    error => error.code === 'FACEBOOK_COOLDOWN' && /Rejected operation: Marketplace search/.test(error.message)
+  );
 });
 
 test('concurrent session creation fetches tokens once', async () => {

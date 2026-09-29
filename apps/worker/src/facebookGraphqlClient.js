@@ -11,6 +11,12 @@ const MARKETPLACE_SEARCH_DOC_ID = "7111939778879383";
 const LOCATION_SEARCH_DOC_ID = "5585904654783609";
 const LISTING_DETAIL_DOC_ID = "26924013917190310";
 const LISTING_PHOTOS_DOC_ID = "10059604367394414";
+const GRAPHQL_OPERATION_NAMES = new Map([
+  [MARKETPLACE_SEARCH_DOC_ID, "Marketplace search"],
+  [LOCATION_SEARCH_DOC_ID, "Marketplace location search"],
+  [LISTING_DETAIL_DOC_ID, "Marketplace listing detail"],
+  [LISTING_PHOTOS_DOC_ID, "Marketplace listing photos"]
+]);
 const DEFAULT_NEWEST_WITHIN_DAYS = 1;
 const CHROME_SALT = "saltysalt";
 const CHROME_ITERATIONS = 1003;
@@ -745,6 +751,7 @@ export class FacebookGraphqlClient {
 
   async graphqlRequest(docId, variables) {
     const session = await this.ensureSession();
+    const operation = GRAPHQL_OPERATION_NAMES.get(docId) ?? "Marketplace GraphQL";
     this.reqCounter += 1;
 
     const body = new URLSearchParams({
@@ -761,23 +768,33 @@ export class FacebookGraphqlClient {
       __rev: session.clientRevision
     });
 
-    const response = await this.request(GRAPHQL_URL, {
-      method: "POST",
-      headers: {
-        ...BROWSER_HEADERS,
-        "user-agent": this.userAgent,
-        cookie: session.cookieHeader,
-        "content-type": "application/x-www-form-urlencoded",
-        accept: "*/*",
-        origin: "https://www.facebook.com",
-        referer: MARKETPLACE_URL,
-        "x-fb-lsd": session.lsd,
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-origin"
-      },
-      body: body.toString()
-    });
+    let response;
+    try {
+      response = await this.request(GRAPHQL_URL, {
+        method: "POST",
+        headers: {
+          ...BROWSER_HEADERS,
+          "user-agent": this.userAgent,
+          cookie: session.cookieHeader,
+          "content-type": "application/x-www-form-urlencoded",
+          accept: "*/*",
+          origin: "https://www.facebook.com",
+          referer: MARKETPLACE_URL,
+          "x-fb-lsd": session.lsd,
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin"
+        },
+        body: body.toString()
+      });
+    } catch (error) {
+      // The shared limiter recognizes HTTP-200 GraphQL throttles before this
+      // client parses the response. Preserve that behavior while recording
+      // which operation Facebook rejected in the run's error message.
+      error.message = `${error.message} Rejected operation: ${operation}.`;
+      error.facebookOperation = operation;
+      throw error;
+    }
 
     if (response.status === 401 || response.status === 403) {
       this.session = null;
@@ -798,7 +815,7 @@ export class FacebookGraphqlClient {
       const data = JSON.parse(text);
       if (data.errors?.length || data.error) {
         this.session = null;
-        throw new Error(formatFacebookError(data, session));
+        throw new Error(`${formatFacebookError(data, session)} Rejected operation: ${operation}.`);
       }
       return data;
     } catch (error) {
