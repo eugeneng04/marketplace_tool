@@ -258,6 +258,11 @@
                 <button id="refreshRunsButton" class="text-button" type="button">Refresh</button>
               </div>
             </div>
+            <details style="padding:0 16px 16px">
+              <summary>Browser diagnostic options</summary>
+              <select id="browserTestMode"><option value="configured">Configured Facebook session</option><option value="logged_out">No Facebook cookies</option></select>
+              <input id="browserTestSessionHash" type="password" placeholder="Optional local session comparison hash" autocomplete="off">
+            </details>
             <pre id="browserTestResult" hidden style="white-space:pre-wrap; overflow-wrap:anywhere; padding:16px" aria-live="polite"></pre>
             <div class="table-wrap">
               <table>

@@ -340,7 +340,9 @@ export async function createApp() {
         return sendJson(res, 200, browserDiagnostic.status());
       }
       if (pathname === "/facebook/browser-test" && req.method === "POST") {
-        return sendJson(res, 202, await browserDiagnostic.start());
+        const body = parseJsonBody(await readBody(req));
+        const mode = body.mode === 'logged_out' ? 'logged_out' : 'configured';
+        return sendJson(res, 202, await browserDiagnostic.start({mode, expectedSessionHash:body.expectedSessionHash}));
       }
       if (pathname === "/facebook/search" && req.method === "POST") {
         const body = parseJsonBody(await readBody(req));

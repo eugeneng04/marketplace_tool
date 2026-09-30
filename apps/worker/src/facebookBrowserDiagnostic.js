@@ -1,4 +1,17 @@
 import { scheduleFacebookRequest } from './facebookRequestLimiter.js';
+import {createHash} from 'node:crypto';
+
+export function sessionCookieHash(header) {
+  const cookies = browserCookies(header);
+  return createHash('sha256').update(JSON.stringify(['c_user','xs'].map(name => cookies.find(cookie=>cookie.name===name)?.value ?? ''))).digest('hex');
+}
+
+export function facebookPageCategory(path) {
+  if (/checkpoint|challenge/i.test(path)) return 'security_checkpoint';
+  if (/login/i.test(path)) return 'login_required';
+  if (path.startsWith('/marketplace')) return 'marketplace';
+  return 'other_facebook_page';
+}
 
 export function browserCookies(header) {
   return header.split(';').flatMap(part => {
@@ -33,7 +46,7 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
   let running = false;
   let nextAllowedAt = 0;
   const status = () => job ?? {state:'idle'};
-  async function start() {
+  async function start({mode='configured', expectedSessionHash} = {}) {
     if (running) return status();
     const cooldown = await schedule.status();
     if (cooldown.paused) return {state:'paused', retryAt:cooldown.retryAt};
@@ -43,8 +56,11 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
     running = true;
     nextAllowedAt = Date.now() + 5 * 60_000;
     job = {state:'running', startedAt:new Date().toISOString(), runtime:process.version,
-      cookieConfigured:Boolean(config.facebookCookie), query:'corvette', maxGraphqlRequests:4,
+      cookieConfigured:Boolean(config.facebookCookie), mode, query:'corvette', maxGraphqlRequests:4,
       requests:[], listingCount:0, outcome:null};
+    const cookieNames = new Set(browserCookies(config.facebookCookie).map(cookie=>cookie.name));
+    job.sessionCookiePresent = {cUser:cookieNames.has('c_user'), xs:cookieNames.has('xs')};
+    if (/^[a-f0-9]{64}$/.test(expectedSessionHash ?? '')) job.sessionMatchesLocal = sessionCookieHash(config.facebookCookie) === expectedSessionHash;
     void run().finally(() => {running=false;});
     return status();
   }
@@ -64,7 +80,7 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
       }
       job.browserVersion = browser.version();
       const context = await browser.newContext({viewport:{width:1280,height:900}, locale:'en-US', serviceWorkers:'block'});
-      if (config.facebookCookie) await context.addCookies(browserCookies(config.facebookCookie));
+      if (job.mode === 'configured' && config.facebookCookie) await context.addCookies(browserCookies(config.facebookCookie));
       const page = await context.newPage();
       timer = setTimeout(() => {stopped=true; void browser.close().catch(()=>{});}, 110_000);
       await context.route('**/*', async route => {
@@ -89,13 +105,17 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
             responsePromise.catch(()=>{});
             await route.continue();
             const response = await responsePromise;
-            const text = await response.text();
             const headers = response.headers();
             const operation = new URLSearchParams(request.postData() ?? '').get('fb_api_req_friendly_name');
-            const summary = graphql ? summarizeGraphql(text) : {};
-            job.requests.push({kind:graphql?'graphql':'document', status:response.status(),
+            const record = {kind:graphql?'graphql':'document', status:response.status(),
               operation:/^[A-Za-z0-9_]{1,160}$/.test(operation ?? '')?operation:undefined,
-              contentType:headers['content-type'] ?? null, ...summary});
+              contentType:headers['content-type'] ?? null};
+            if (document) record.pageCategory=facebookPageCategory(url.pathname);
+            job.requests.push(record);
+            // Chromium does not provide redirect bodies; record the status without reading them.
+            const text = response.status() >= 300 && response.status() < 400 ? '' : await response.text();
+            const summary = graphql ? summarizeGraphql(text) : {};
+            Object.assign(record, summary);
             if (summary.rateLimited || response.status() === 429) {
               job.outcome='rate_limited'; stopped=true;
             }
@@ -111,7 +131,8 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
       const deadline = Date.now() + 60_000;
       while (!stopped && Date.now() < deadline) {
         const path = new URL(page.url()).pathname;
-        if (/login|checkpoint|challenge/i.test(path)) {job.outcome='login_or_challenge'; break;}
+        job.finalPageCategory=facebookPageCategory(path);
+        if (['login_required','security_checkpoint'].includes(job.finalPageCategory)) {job.outcome=job.finalPageCategory; break;}
         const links = await page.locator('a[href*="/marketplace/item/"]:visible').evaluateAll(elements => elements.map(element => element.getAttribute('href')));
         job.listingCount = new Set(links.map(href => href.match(/\/marketplace\/item\/(\d+)/)?.[1]).filter(Boolean)).size;
         if (job.listingCount > 0) {job.outcome='listings_visible'; break;}

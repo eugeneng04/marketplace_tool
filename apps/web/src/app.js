@@ -1129,7 +1129,7 @@ function bindEvents() {
     output.hidden = false;
     output.textContent = "Starting a bounded browser search on the server…";
     try {
-      let diagnostic = await api('/facebook/browser-test', {method:'POST'});
+      let diagnostic = await api('/facebook/browser-test', {method:'POST', body:JSON.stringify({mode:$('#browserTestMode').value, expectedSessionHash:$('#browserTestSessionHash').value.trim()})});
       const deadline = Date.now() + 180_000;
       while (diagnostic.state === 'running' && Date.now() < deadline) {
         output.textContent = JSON.stringify(diagnostic, null, 2);
