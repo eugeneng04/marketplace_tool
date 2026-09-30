@@ -123,7 +123,9 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
         const [{chromium:playwright}, {default:chromium}] = await Promise.all([
           import('playwright-core'), import('@sparticuz/chromium')
         ]);
-        browser = await playwright.launch({args:chromium.args, executablePath:await chromium.executablePath(), timeout:30_000});
+        // Render is a long-running container, not Lambda. Single-process mode
+        // couples renderer failures to the whole browser and is unstable here.
+        browser = await playwright.launch({args:chromium.args.filter(arg=>arg !== '--single-process'), executablePath:await chromium.executablePath(), timeout:30_000});
       }
       job.browserVersion = browser.version();
       const context = await browser.newContext({viewport:{width:1280,height:900}, locale:'en-US', serviceWorkers:'block'});
