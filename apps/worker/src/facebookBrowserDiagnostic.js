@@ -13,6 +13,23 @@ export function facebookPageCategory(path) {
   return 'other_facebook_page';
 }
 
+export function redirectCategory(location, base) {
+  if (!location) return undefined;
+  try {
+    const url = new URL(location, base);
+    if (url.hostname !== 'facebook.com' && !url.hostname.endsWith('.facebook.com')) return 'external_redirect';
+    return facebookPageCategory(url.pathname);
+  } catch { return 'invalid_redirect'; }
+}
+
+export function browserFailureCode(error) {
+  const message = String(error?.message ?? error ?? '');
+  const code = message.match(/\bnet::(ERR_[A-Z_]+)\b/)?.[1];
+  if (code) return code;
+  if (error?.name === 'TimeoutError') return 'timeout';
+  return 'unclassified';
+}
+
 export function browserCookies(header) {
   return header.split(';').flatMap(part => {
     const separator = part.indexOf('=');
@@ -66,6 +83,7 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
   }
   async function run() {
     let browser;
+    let page;
     let stopped = false;
     let graphCount = 0;
     let documentCount = 0;
@@ -81,7 +99,22 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
       job.browserVersion = browser.version();
       const context = await browser.newContext({viewport:{width:1280,height:900}, locale:'en-US', serviceWorkers:'block'});
       if (job.mode === 'configured' && config.facebookCookie) await context.addCookies(browserCookies(config.facebookCookie));
-      const page = await context.newPage();
+      page = await context.newPage();
+      // Playwright routes only the first request in a server redirect chain.
+      // Observe subsequent document responses separately without reading bodies.
+      page.on('response', response => {
+        const request = response.request();
+        if (stopped || request.resourceType() !== 'document' || !request.redirectedFrom()) return;
+        const url = new URL(response.url());
+        const headers = response.headers();
+        job.requests.push({kind:'document', status:response.status(), redirected:true,
+          contentType:headers['content-type'] ?? null, pageCategory:facebookPageCategory(url.pathname),
+          redirectCategory:redirectCategory(headers.location,url)});
+      });
+      page.on('requestfailed', request => {
+        if (request.resourceType() !== 'document') return;
+        job.documentFailureCode = browserFailureCode(request.failure()?.errorText);
+      });
       timer = setTimeout(() => {stopped=true; void browser.close().catch(()=>{});}, 110_000);
       await context.route('**/*', async route => {
         const request = route.request();
@@ -97,12 +130,14 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
         if ((graphql && ++graphCount > 4) || (document && ++documentCount > 3)) {
           return route.abort().catch(()=>{});
         }
+        let continued = false;
         try {
           await schedule(async () => {
             if (stopped) throw new Error('Diagnostic stopped');
             const responsePromise = page.waitForResponse(response => response.request() === request, {timeout:30_000});
             // Attach a handler before continuing, including when continuation fails.
             responsePromise.catch(()=>{});
+            continued = true;
             await route.continue();
             const response = await responsePromise;
             const headers = response.headers();
@@ -110,21 +145,33 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
             const record = {kind:graphql?'graphql':'document', status:response.status(),
               operation:/^[A-Za-z0-9_]{1,160}$/.test(operation ?? '')?operation:undefined,
               contentType:headers['content-type'] ?? null};
-            if (document) record.pageCategory=facebookPageCategory(url.pathname);
+            if (document) {
+              record.pageCategory=facebookPageCategory(url.pathname);
+              if (response.status() >= 300 && response.status() < 400) {
+                record.redirectCategory=redirectCategory(headers.location, url);
+              }
+            }
             job.requests.push(record);
-            // Chromium does not provide redirect bodies; record the status without reading them.
-            const text = response.status() >= 300 && response.status() < 400 ? '' : await response.text();
+            // Document bodies are not needed for this diagnostic. In particular, never
+            // read redirect bodies: Chromium follows them with a separate request.
+            const text = graphql && !(response.status() >= 300 && response.status() < 400) ? await response.text() : '';
             const summary = graphql ? summarizeGraphql(text) : {};
             Object.assign(record, summary);
             if (summary.rateLimited || response.status() === 429) {
               job.outcome='rate_limited'; stopped=true;
             }
-            return new Response(text,{status:response.status(),headers});
+            // Only the headers used by the cooldown belong in this synthetic response.
+            // Native Response forbids a body for 204, 205, and 304 statuses.
+            return new Response([204,205,304].includes(response.status()) ? null : text,
+              {status:response.status(), headers:{'content-type':headers['content-type'] ?? '',
+                ...(headers['retry-after'] ? {'retry-after':headers['retry-after']} : {})}});
           }, Math.min(3, config.facebookMaxRequestsPerMinute));
         } catch (error) {
           if (error.code === 'FACEBOOK_COOLDOWN') {job.outcome='rate_limited'; stopped=true;}
-          else if (!stopped) job.requestFailure=true;
-          await route.abort().catch(()=>{});
+          else if (!stopped) {job.requestFailure=true; job.requestFailureCode=browserFailureCode(error);}
+          // The route has already been continued if a response was observed. Aborting
+          // it after an observation failure can interfere with redirect navigation.
+          if (!continued) await route.abort().catch(()=>{});
         }
       });
       await page.goto('https://www.facebook.com/marketplace/search/?query=corvette', {waitUntil:'domcontentloaded', timeout:70_000});
@@ -143,6 +190,10 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
       // Browser errors can contain navigation URLs or credentials: return categories only.
       job.outcome ??= browser ? 'navigation_failed' : 'browser_launch_failed';
       job.errorType = error.name;
+      job.navigationFailureCode = browserFailureCode(error);
+      if (page) {
+        try { job.finalPageCategory=facebookPageCategory(new URL(page.url()).pathname); } catch { /* Page may not have committed a URL. */ }
+      }
     } finally {
       stopped=true;
       clearTimeout(timer);

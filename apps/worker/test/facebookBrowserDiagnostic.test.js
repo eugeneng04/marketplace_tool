@@ -1,6 +1,41 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {browserCookies, summarizeGraphql, createBrowserDiagnostic, sessionCookieHash, facebookPageCategory} from '../src/facebookBrowserDiagnostic.js';
+import {browserCookies, summarizeGraphql, createBrowserDiagnostic, sessionCookieHash, facebookPageCategory, redirectCategory, browserFailureCode} from '../src/facebookBrowserDiagnostic.js';
+
+test('redirect and network summaries omit sensitive URLs and error text', () => {
+  assert.equal(redirectCategory('/login/?secret=abc','https://www.facebook.com/marketplace/'),'login_required');
+  assert.equal(redirectCategory('https://example.com/?secret=abc','https://www.facebook.com/'),'external_redirect');
+  assert.equal(browserFailureCode(new Error('net::ERR_ABORTED at https://secret/')),'ERR_ABORTED');
+  assert.equal(browserFailureCode(new Error('cookie=secret')),'unclassified');
+});
+
+for (const status of [302,304]) {
+  test(`document ${status} does not read its body or abort a continued route`, async () => {
+    let handler;
+    let aborted=0;
+    let bodyReads=0;
+    const events={};
+    const request={url:()=> 'https://www.facebook.com/marketplace/search/', resourceType:()=> 'document',postData:()=>null};
+    const response={request:()=>request,status:()=>status,headers:()=>({'content-type':'text/html',location:'/login/?secret=abc'}),
+      text:async()=>{bodyReads++;throw new Error('Redirect body unavailable');}};
+    const route={request:()=>request,continue:async()=>{},abort:async()=>{aborted++;}};
+    const page={on:(event,callback)=>{events[event]=callback;}, waitForResponse:async()=>response,
+      goto:async()=>{await handler(route);},url:()=> 'https://www.facebook.com/login/'};
+    const browser={version:()=> 'test',newContext:async()=>({addCookies:async()=>{},newPage:async()=>page,
+      route:async(pattern,callback)=>{handler=callback;}}),close:async()=>{}};
+    const schedule=Object.assign(async fn=>fn(),{status:async()=>({paused:false})});
+    const diagnostic=createBrowserDiagnostic({config:{facebookCookie:'c_user=123; xs=abc',facebookMaxRequestsPerMinute:3},schedule,launch:async()=>browser});
+    await diagnostic.start();
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(diagnostic.status().state,'finished');
+    assert.equal(diagnostic.status().outcome,'login_required');
+    assert.equal(diagnostic.status().requests[0].redirectCategory,'login_required');
+    assert.equal(diagnostic.status().requestFailure,undefined);
+    assert.equal(bodyReads,0);
+    assert.equal(aborted,0);
+    assert.equal(JSON.stringify(diagnostic.status()).includes('secret'),false);
+  });
+}
 
 test('session comparison ignores cookie order and unrelated cookies', () => {
   assert.equal(sessionCookieHash('c_user=123; xs=abc; datr=one'),sessionCookieHash('datr=two; xs=abc; c_user=123'));
