@@ -253,8 +253,12 @@
           <section class="panel table-panel">
             <div class="panel-header">
               <h3>Runs</h3>
-              <button id="refreshRunsButton" class="text-button" type="button">Refresh</button>
+              <div>
+                <button id="browserTestButton" class="text-button" type="button">Test Facebook browser</button>
+                <button id="refreshRunsButton" class="text-button" type="button">Refresh</button>
+              </div>
             </div>
+            <pre id="browserTestResult" hidden style="white-space:pre-wrap; overflow-wrap:anywhere; padding:16px" aria-live="polite"></pre>
             <div class="table-wrap">
               <table>
                 <thead>

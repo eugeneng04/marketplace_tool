@@ -1122,6 +1122,25 @@ function bindEvents() {
   $("#profileGenerationInput").addEventListener("change", (event) => chooseProfileGeneration(event.target.value));
   $("#refreshButton").addEventListener("click", refreshAll);
   $("#refreshRunsButton").addEventListener("click", loadRuns);
+  $("#browserTestButton").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    const output = $("#browserTestResult");
+    button.disabled = true;
+    output.hidden = false;
+    output.textContent = "Starting a bounded browser search on the server…";
+    try {
+      let diagnostic = await api('/facebook/browser-test', {method:'POST'});
+      const deadline = Date.now() + 180_000;
+      while (diagnostic.state === 'running' && Date.now() < deadline) {
+        output.textContent = JSON.stringify(diagnostic, null, 2);
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        diagnostic = await api('/facebook/browser-test');
+      }
+      output.textContent = JSON.stringify(diagnostic, null, 2);
+    } catch (error) {
+      output.textContent = error.message;
+    } finally { button.disabled = false; }
+  });
   $("#healthButton").addEventListener("click", async () => {
     try {
       $("#healthStatus").textContent = "Connecting… The free server may take a minute to wake up.";

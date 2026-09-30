@@ -12,14 +12,13 @@ function cooldownError(until) {
 async function isRateLimited(response) {
   if (response?.status === 429) return true;
   if (!response?.ok || typeof response.clone !== 'function') return false;
-  // Facebook GraphQL commonly returns rate limits with HTTP 200.
-  if (!response.headers.get('content-type')?.includes('json')) {
-    // GraphQL responses can use text/plain; HTML token pages are not JSON.
-    if (response.headers.get('content-type')?.includes('text/html')) return false;
-  }
+  // Facebook can return GraphQL JSON with HTTP 200 and a text/html header.
+  // Inspect the body prefix instead of trusting the declared content type.
   try {
     const text = await response.clone().text();
-    const data = JSON.parse(text.slice(text.indexOf('{')));
+    const json = text.trimStart().replace(/^for\s*\(;;\);\s*/, '');
+    if (!json.startsWith('{')) return false;
+    const data = JSON.parse(json);
     const errors = Array.isArray(data.errors) ? data.errors : [typeof data.error === 'object' ? data.error : {code:data.error,message:data.errorDescription || data.errorSummary}];
     return errors.some(error => String(error?.code ?? error?.extensions?.code) === '1675004' || /rate limit|too many requests/i.test(error?.message ?? ''));
   } catch { return false; }

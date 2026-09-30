@@ -5,9 +5,9 @@ import { FacebookGraphqlClient, formatFacebookError } from '../src/facebookGraph
 import { createFacebookConnector } from '../src/facebookConnector.js';
 import { loadConfig } from '../src/config.js';
 
-function fakeLimiter() {
+function fakeLimiter(options = {}) {
   let time = 0;
-  return { now: () => time, advance: ms => {time += ms;}, schedule: createFacebookRequestLimiter({now: () => time, sleep: async ms => {time += ms;}}) };
+  return { now: () => time, advance: ms => {time += ms;}, schedule: createFacebookRequestLimiter({...options, now: () => time, sleep: async ms => {time += ms;}}) };
 }
 
 test('concurrent callers share spacing, including after a network failure', async () => {
@@ -102,6 +102,30 @@ test('HTTP 200 Facebook rate limit blocks queued requests for the short fallback
   assert.equal(calls,1);
   assert.ok(result.every(r=>r.status==='rejected' && r.reason.code==='FACEBOOK_COOLDOWN'));
   assert.equal(result[0].reason.retryAt,FACEBOOK_COOLDOWN_MS);
+});
+
+test('GraphQL rate limits labeled text/html stop queued requests and persist cooldown', async () => {
+  let persisted = 0;
+  const clock = fakeLimiter({store:{read:async()=>persisted,write:async until=>{persisted=until;}}});
+  let calls = 0;
+  const result = await Promise.allSettled([
+    clock.schedule(() => {
+      calls++;
+      return new Response('for (;;);' + JSON.stringify({errors:[{code:1675004,message:'Rate limit exceeded'}]}),
+        {headers:{'content-type':'text/html; charset="utf-8"'}});
+    }),
+    clock.schedule(() => { calls++; return new Response('{}'); })
+  ]);
+  assert.equal(calls,1);
+  assert.ok(result.every(r=>r.status==='rejected' && r.reason.code==='FACEBOOK_COOLDOWN'));
+  assert.equal(persisted,FACEBOOK_COOLDOWN_MS);
+});
+
+test('real HTML containing embedded error JSON does not activate cooldown', async () => {
+  const clock = fakeLimiter();
+  await clock.schedule(() => new Response('<html><script>{"error":1675004}</script></html>',
+    {headers:{'content-type':'text/html'}}));
+  assert.deepEqual(await clock.schedule.status(),{paused:false,retryAt:null});
 });
 
 test('cooldown persists across limiter restarts, and repeated clicks do not extend it', async () => {

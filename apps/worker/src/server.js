@@ -1,4 +1,5 @@
 import { configureFacebookCooldown, scheduleFacebookRequest } from "./facebookRequestLimiter.js";
+import { createBrowserDiagnostic } from "./facebookBrowserDiagnostic.js";
 import { readFile } from "node:fs/promises";
 import { createDueSearchRunner } from "./scheduler.js";
 import { createServer } from "node:http";
@@ -217,6 +218,7 @@ export async function createApp() {
 
   const connector = buildConnector(config);
   const facebookGraphqlClient = buildFacebookGraphqlClient(config);
+  const browserDiagnostic = createBrowserDiagnostic({config});
 
   const runDueSearches = createDueSearchRunner({
     db, listDueSearchGroups, listSearchGroups, getProfile, advanceSearchGroup,
@@ -333,6 +335,12 @@ export async function createApp() {
           runs.push({ profileId: profile.id, ...(await runProfileSync({ db, connector, profile: fullProfile, preferManualTransmission: config.preferManualTransmission })) });
         }
         return sendJson(res, 200, { count: runs.length, runs });
+      }
+      if (pathname === "/facebook/browser-test" && req.method === "GET") {
+        return sendJson(res, 200, browserDiagnostic.status());
+      }
+      if (pathname === "/facebook/browser-test" && req.method === "POST") {
+        return sendJson(res, 202, await browserDiagnostic.start());
       }
       if (pathname === "/facebook/search" && req.method === "POST") {
         const body = parseJsonBody(await readBody(req));
