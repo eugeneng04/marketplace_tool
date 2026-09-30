@@ -26,6 +26,10 @@ export function browserFailureCode(error) {
   const message = String(error?.message ?? error ?? '');
   const code = message.match(/\bnet::(ERR_[A-Z_]+)\b/)?.[1];
   if (code) return code;
+  if (/page crashed/i.test(message)) return 'page_crashed';
+  if (/target.*(?:closed|crashed)|browser has been closed/i.test(message)) return 'browser_or_page_closed';
+  if (/interrupted by another navigation/i.test(message)) return 'navigation_interrupted';
+  if (/execution context was destroyed|cannot find context/i.test(message)) return 'execution_context_changed';
   if (error?.name === 'TimeoutError') return 'timeout';
   return 'unclassified';
 }
@@ -88,6 +92,7 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
     let graphCount = 0;
     let documentCount = 0;
     let timer;
+    let stage = 'launch';
     try {
       if (launch) browser = await launch();
       else {
@@ -100,6 +105,7 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
       const context = await browser.newContext({viewport:{width:1280,height:900}, locale:'en-US', serviceWorkers:'block'});
       if (job.mode === 'configured' && config.facebookCookie) await context.addCookies(browserCookies(config.facebookCookie));
       page = await context.newPage();
+      page.on('crash', () => {job.pageCrashed=true;});
       // Playwright routes only the first request in a server redirect chain.
       // Observe subsequent document responses separately without reading bodies.
       page.on('response', response => {
@@ -174,7 +180,9 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
           if (!continued) await route.abort().catch(()=>{});
         }
       });
-      await page.goto('https://www.facebook.com/marketplace/search/?query=corvette', {waitUntil:'domcontentloaded', timeout:70_000});
+      stage = 'navigation';
+      await page.goto('https://www.facebook.com/marketplace/search/?query=corvette', {waitUntil:'commit', timeout:70_000});
+      stage = 'observe_listings';
       const deadline = Date.now() + 60_000;
       while (!stopped && Date.now() < deadline) {
         const path = new URL(page.url()).pathname;
@@ -191,6 +199,7 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
       job.outcome ??= browser ? 'navigation_failed' : 'browser_launch_failed';
       job.errorType = error.name;
       job.navigationFailureCode = browserFailureCode(error);
+      job.failureStage = stage;
       if (page) {
         try { job.finalPageCategory=facebookPageCategory(new URL(page.url()).pathname); } catch { /* Page may not have committed a URL. */ }
       }

@@ -7,6 +7,8 @@ test('redirect and network summaries omit sensitive URLs and error text', () => 
   assert.equal(redirectCategory('https://example.com/?secret=abc','https://www.facebook.com/'),'external_redirect');
   assert.equal(browserFailureCode(new Error('net::ERR_ABORTED at https://secret/')),'ERR_ABORTED');
   assert.equal(browserFailureCode(new Error('cookie=secret')),'unclassified');
+  assert.equal(browserFailureCode(new Error('page.goto: Page crashed')),'page_crashed');
+  assert.equal(browserFailureCode(new Error('Navigation to secret interrupted by another navigation')),'navigation_interrupted');
 });
 
 for (const status of [302,304]) {
