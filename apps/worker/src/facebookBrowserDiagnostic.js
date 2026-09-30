@@ -1,5 +1,28 @@
 import { scheduleFacebookRequest } from './facebookRequestLimiter.js';
 import {createHash} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
+
+export function parseMemoryEvents(text) {
+  const result = {};
+  for (const line of text.split('\n')) {
+    const match = line.trim().match(/^(oom|oom_kill|oom_group_kill)\s+(\d+)$/);
+    if (match) result[match[1]] = Number(match[2]);
+  }
+  return result;
+}
+
+async function containerMemory() {
+  if (process.platform !== 'linux') return undefined;
+  try {
+    const [events, current, limit] = await Promise.all([
+      readFile('/sys/fs/cgroup/memory.events','utf8'),
+      readFile('/sys/fs/cgroup/memory.current','utf8'),
+      readFile('/sys/fs/cgroup/memory.max','utf8')
+    ]);
+    return {...parseMemoryEvents(events), currentBytes:Number(current.trim()),
+      limitBytes:limit.trim() === 'max' ? null : Number(limit.trim())};
+  } catch { return undefined; }
+}
 
 export function sessionCookieHash(header) {
   const cookies = browserCookies(header);
@@ -62,7 +85,7 @@ export function summarizeGraphql(text) {
   return {errorCodes:[...codes], hasData, rateLimited};
 }
 
-export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequest, launch} = {}) {
+export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequest, launch, readMemory = containerMemory} = {}) {
   let job = null;
   let running = false;
   let nextAllowedAt = 0;
@@ -94,6 +117,7 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
     let timer;
     let stage = 'launch';
     try {
+      job.memoryBefore = await readMemory();
       if (launch) browser = await launch();
       else {
         const [{chromium:playwright}, {default:chromium}] = await Promise.all([
@@ -206,6 +230,10 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
     } finally {
       stopped=true;
       clearTimeout(timer);
+      job.memoryAfter = await readMemory();
+      if (job.memoryBefore && job.memoryAfter) {
+        job.oomKillDelta = (job.memoryAfter.oom_kill ?? 0) - (job.memoryBefore.oom_kill ?? 0);
+      }
       if (browser) await browser.close().catch(()=>{});
       job.state='finished';
       job.finishedAt=new Date().toISOString();

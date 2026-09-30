@@ -1,6 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {browserCookies, summarizeGraphql, createBrowserDiagnostic, sessionCookieHash, facebookPageCategory, redirectCategory, browserFailureCode} from '../src/facebookBrowserDiagnostic.js';
+import {browserCookies, summarizeGraphql, createBrowserDiagnostic, sessionCookieHash, facebookPageCategory, redirectCategory, browserFailureCode, parseMemoryEvents} from '../src/facebookBrowserDiagnostic.js';
+
+test('memory counters only report allowed numeric fields', () => {
+  assert.deepEqual(parseMemoryEvents('low 0\noom 3\noom_kill 2\noom_group_kill 0\nsecret abc'),
+    {oom:3,oom_kill:2,oom_group_kill:0});
+});
+
+test('diagnostic reports container OOM kills during browser execution', async () => {
+  let reads=0;
+  const schedule=Object.assign(async fn=>fn(),{status:async()=>({paused:false})});
+  const diagnostic=createBrowserDiagnostic({config:{facebookCookie:''},schedule,
+    readMemory:async()=>({oom_kill:reads++}),launch:async()=>{throw new Error('Browser exited');}});
+  await diagnostic.start();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(diagnostic.status().oomKillDelta,1);
+});
 
 test('redirect and network summaries omit sensitive URLs and error text', () => {
   assert.equal(redirectCategory('/login/?secret=abc','https://www.facebook.com/marketplace/'),'login_required');
