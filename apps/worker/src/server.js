@@ -246,7 +246,7 @@ export async function createApp() {
     }
 
     if (pathname === "/health") {
-      return sendJson(res, 200, { ok: true, service: "resale-intelligence-api" });
+      return sendJson(res, 200, { ok: true, service: "resale-intelligence-api", commit: process.env.RENDER_GIT_COMMIT ?? null });
     }
 
     // Static assets contain no secrets; API routes still require authentication.
@@ -348,7 +348,10 @@ export async function createApp() {
         return sendJson(res, 202, await browserDiagnostic.start({mode, expectedSessionHash:body.expectedSessionHash}));
       }
       if (pathname === '/facebook/search-inspection' && req.method === 'GET') {
-        return sendJson(res, 200, connector.client?.lastSearchInspection ?? searchInspection);
+        const captured = connector.client?.lastSearchInspection;
+        const latest = searchInspection.state === 'running' || (searchInspection.startedAt && searchInspection.startedAt >= (captured?.startedAt ?? ''))
+          ? searchInspection : captured ?? searchInspection;
+        return sendJson(res, 200, latest);
       }
       if (pathname === '/facebook/search-inspection' && req.method === 'POST') {
         if (searchInspection.state === 'running') return sendJson(res, 202, searchInspection);
@@ -368,6 +371,7 @@ export async function createApp() {
         const job = searchInspection;
         const inspectionClient = connector.client ?? facebookGraphqlClient;
         void inspectionClient.searchListings(input).then(result=>{
+          Object.assign(job, inspectionClient.lastSearchInspection ?? {});
           job.initialGraphqlFields = inspectionClient.lastSearchInspection?.initialGraphqlFields;
           job.listingCount = result.listings.length;
           job.hasNextPage = result.hasNextPage;
@@ -377,6 +381,7 @@ export async function createApp() {
           job.state = 'finished';
           job.finishedAt = new Date().toISOString();
         }).catch(error=>{
+          Object.assign(job, error.searchInspection ?? {});
           job.state='failed';
           const message = `${error?.message ?? ''}`;
           job.failureCategory = /login|expired|session.*reject/i.test(message) ? 'session_rejected'
@@ -385,7 +390,7 @@ export async function createApp() {
             : /placeholder/i.test(message) ? 'placeholder_response'
             : /fetch|HTTP|network/i.test(message) ? 'request_failed' : 'search_failed';
           job.finishedAt = new Date().toISOString();
-          job.error='Initial search failed. No detail requests or listing writes were made.';
+          job.error = error.searchInspection?.error ?? 'Initial search failed before response capture. No detail requests or listing writes were made.';
         });
         return sendJson(res, 202, job);
       }

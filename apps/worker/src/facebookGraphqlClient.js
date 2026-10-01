@@ -1,5 +1,5 @@
 import { scheduleFacebookRequest } from "./facebookRequestLimiter.js";
-import { inspectSearchPayload } from "./facebookSearchInspection.js";
+import { inspectSearchPayload, sanitizeFacebookEvidence } from "./facebookSearchInspection.js";
 import crypto from "node:crypto";
 import { execFileSync, execSync } from "node:child_process";
 import os from "node:os";
@@ -726,7 +726,11 @@ export class FacebookGraphqlClient {
     }
     // Logged-out Marketplace requests use page tokens without account cookies.
 
+    if (this.lastSearchInspection?.state === 'running') {
+      Object.assign(this.lastSearchInspection.session, {hasUserCookie: Boolean(userId), hasSessionCookie: Boolean(sessionCookie)});
+    }
     const tokens = await this.extractTokens(cookieHeader);
+    if (this.lastSearchInspection?.state === 'running') this.lastSearchInspection.session.pageTokensAvailable = true;
     this.session = {
       cookies,
       cookieHeader,
@@ -753,6 +757,9 @@ export class FacebookGraphqlClient {
       redirect: "follow"
     });
 
+    if (this.lastSearchInspection?.state === 'running') {
+      this.lastSearchInspection.session.tokenPageHttpStatus = response.status;
+    }
     if (!response.ok) {
       throw new Error(`Failed to fetch Marketplace token page: HTTP ${response.status}`);
     }
@@ -831,6 +838,12 @@ export class FacebookGraphqlClient {
       throw error;
     }
 
+    if (docId === MARKETPLACE_SEARCH_DOC_ID && this.lastSearchInspection?.state === 'running') {
+      this.lastSearchInspection.transport = {
+        operation, docId, httpStatus: response.status,
+        contentType: response.headers.get('content-type')
+      };
+    }
     if (response.status === 401 || response.status === 403) {
       this.session = null;
       throw new Error("Facebook session expired or was rejected.");
@@ -848,6 +861,10 @@ export class FacebookGraphqlClient {
 
     try {
       const data = JSON.parse(text);
+      if (docId === MARKETPLACE_SEARCH_DOC_ID && this.lastSearchInspection?.state === 'running') {
+        this.lastSearchInspection.response = sanitizeFacebookEvidence(data, session);
+        this.lastSearchInspection.transport.bodyLength = text.length;
+      }
       if (data.errors?.length || data.error) {
         this.session = null;
         throw new Error(`${formatFacebookError(data, session)} Rejected operation: ${operation}.`);
@@ -860,16 +877,45 @@ export class FacebookGraphqlClient {
   }
 
   async searchListings(params) {
+    this.lastSearchInspection = {
+      state: 'running', query: params.query, startedAt: new Date().toISOString(), detailRequests: 0,
+      session: { configuredCookie: Boolean(this.cookieHeader), chromeCookiesEnabled: this.useChromeCookies },
+      fallback: { attempted: false, reason: 'search_response_unavailable' }
+    };
+    try {
+      const result = await this.performSearchListings(params);
+      this.lastSearchInspection.state = 'finished';
+      this.lastSearchInspection.finishedAt = new Date().toISOString();
+      return result;
+    } catch (error) {
+      const inspection = this.lastSearchInspection;
+      inspection.state = 'failed';
+      inspection.finishedAt = new Date().toISOString();
+      inspection.error = sanitizeFacebookEvidence(`${error?.message ?? 'Search failed'}`, this.session ?? {cookieHeader: this.cookieHeader});
+      error.searchInspection = inspection;
+      throw error;
+    }
+  }
+
+  async performSearchListings(params) {
     const data = await this.graphqlRequest(MARKETPLACE_SEARCH_DOC_ID, buildSearchVariables(params));
     const result = parseSearchResponse(data, params.limit);
-    const initialGraphqlFields = inspectSearchPayload(data);
+    const safeData = sanitizeFacebookEvidence(data, this.session ?? {cookieHeader: this.cookieHeader});
+    const initialGraphqlFields = inspectSearchPayload(safeData);
     const inspection = {
-      state: 'finished', query: params.query, finishedAt: new Date().toISOString(),
+      ...this.lastSearchInspection,
+      state: 'running', query: params.query,
       detailRequests: 0, cardSource: 'graphql', listingCount: result.listings.length,
       initialGraphqlFields,
+      response: safeData, diagnostics: result.diagnostics,
+      hasNextPage: result.hasNextPage,
+      fallback: { attempted: false, reason: result.diagnostics?.cursorPlaceholderCount > 0 && result.diagnostics.richListingCount === 0
+        ? 'cursor_placeholders' : result.listings.length === 0 && result.hasNextPage
+          ? 'empty_feed_without_cursor_placeholders' : 'not_needed' },
       listingFields: inspectSearchPayload({listings: result.listings.map(listing => listing.raw)}),
       basicListings: result.listings.map(({raw, ...listing}) => listing)
     };
+    this.lastSearchInspection = inspection;
     // Persist the structural inventory with normal runs, without example values.
     result.diagnostics = {...result.diagnostics,
       initialSearchFields: initialGraphqlFields.map(({example, ...field}) => field)};
@@ -878,6 +924,7 @@ export class FacebookGraphqlClient {
     // rich cards to use; otherwise the extra cursor IDs needlessly trigger a
     // slow page fetch and replace correctly parsed GraphQL results.
     if (result.diagnostics?.cursorPlaceholderCount > 0 && result.diagnostics.richListingCount === 0) {
+      inspection.fallback.attempted = true;
       const session = await this.ensureSession();
       const searchUrl = new URL(params.searchUrl || this.searchBaseUrl);
       if (searchUrl.protocol !== "https:" || !/(^|\.)facebook\.com$/i.test(searchUrl.hostname) || !searchUrl.pathname.startsWith("/marketplace/")) {
@@ -903,6 +950,7 @@ export class FacebookGraphqlClient {
         },
         redirect: "follow"
       });
+      inspection.fallback.httpStatus = response.status;
       if (!response.ok) throw new Error(`Marketplace search page returned HTTP ${response.status}.`);
       const html = await response.text();
       const finalUrl = response.url ? new URL(response.url) : searchUrl;
@@ -913,6 +961,7 @@ export class FacebookGraphqlClient {
         throw new Error("Facebook redirected the Marketplace search to login. Sign in and retry the search.");
       }
       const pageListings = parseMarketplaceSearchHtml(html, params.limit);
+      inspection.fallback.pageCardCount = pageListings.length;
       if (pageListings.length) {
         inspection.cardSource = 'marketplace_search_page';
         inspection.listingCount = pageListings.length;

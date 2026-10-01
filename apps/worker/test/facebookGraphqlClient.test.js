@@ -207,7 +207,15 @@ test("an empty Marketplace feed that advertises another page fails instead of re
   });
   await assert.rejects(
     client.searchListings({ query: "corvette", latitude: 37, longitude: -122, radiusKm: 50, limit: 3 }),
-    /empty Marketplace feed while reporting more pages/
+    error => {
+      assert.match(error.message, /empty Marketplace feed while reporting more pages/);
+      assert.equal(error.searchInspection.state, 'failed');
+      assert.deepEqual(error.searchInspection.response.data.marketplace_search.feed_units.edges, []);
+      assert.equal(error.searchInspection.diagnostics.edgeCount, 0);
+      assert.equal(error.searchInspection.hasNextPage, true);
+      assert.deepEqual(error.searchInspection.fallback, {attempted: false, reason: 'empty_feed_without_cursor_placeholders'});
+      return true;
+    }
   );
 });
 
@@ -305,4 +313,25 @@ test("explicit cookie session remains available", async () => {
     return { fbDtsg: 'token' };
   };
   assert.equal((await client.ensureSession()).userId, '123');
+});
+
+
+test("rejected search retains sanitized HTTP and GraphQL evidence", async () => {
+  const client = new FacebookGraphqlClient({ useChromeCookies: false });
+  const session = {cookieHeader: 'c_user=123456789; xs=private-cookie', fbDtsg: 'private-token', lsd: 'private-lsd'};
+  client.ensureSession = async () => { client.session = session; return session; };
+  client.request = async () => new Response(JSON.stringify({
+    errors: [{code: 123, message: 'Denied private-cookie private-token https://facebook.com/login/?access_token=secret'}],
+    data: {marketplace_search: null}, fb_dtsg: 'private-token', nested: {access_token: 'secret'}
+  }), {status: 200, headers: {'content-type': 'text/html'}});
+  await assert.rejects(client.searchListings({query: 'corvette', limit: 3}), /Facebook rejected/);
+  const report = client.lastSearchInspection;
+  assert.equal(report.state, 'failed');
+  assert.equal(report.transport.httpStatus, 200);
+  assert.equal(report.response.errors[0].code, 123);
+  assert.equal(report.response.data.marketplace_search, null);
+  const serialized = JSON.stringify(report);
+  for (const secret of ['private-cookie', 'private-token', 'private-lsd', 'access_token', 'fb_dtsg', '123456789']) {
+    assert.equal(serialized.includes(secret), false, secret);
+  }
 });
