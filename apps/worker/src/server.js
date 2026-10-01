@@ -359,7 +359,10 @@ export async function createApp() {
         const filters = profile.filtersJson ?? {};
         const input = parseFacebookSearchInput({query:profile.query,latitude:filters.latitude ?? filters.lat,
           longitude:filters.longitude ?? filters.lng ?? filters.lon,radiusKm:filters.radiusKm ?? Math.round(profile.radiusMiles*1.60934),
-          minPrice:profile.minPrice,maxPrice:profile.maxPrice,limit:25});
+          minPrice:profile.minPrice,maxPrice:profile.maxPrice,category:filters.facebookCategoryId,limit:config.maxCardsPerRun});
+        input.newestWithinDays = filters.newestWithinDays ?? 1;
+        input.searchUrl = filters.searchUrl;
+        input.location = profile.location;
         lastInspectionStarted = Date.now();
         searchInspection = {state:'running',query:profile.query,startedAt:new Date().toISOString(),detailRequests:0};
         const job = searchInspection;
@@ -378,7 +381,17 @@ export async function createApp() {
           job.basicListings = result.listings.map(({raw,...listing})=>listing);
           job.state = 'finished';
           job.finishedAt = new Date().toISOString();
-        }).catch(()=>{job.state='failed'; job.error='Initial search failed. No detail requests or listing writes were made.';});
+        }).catch(error=>{
+          job.state='failed';
+          const message = `${error?.message ?? ''}`;
+          job.failureCategory = /login|expired|session.*reject/i.test(message) ? 'session_rejected'
+            : /rate.limit|cooldown|paused until/i.test(message) ? 'rate_limited'
+            : /extract.*tokens/i.test(message) ? 'page_tokens_unavailable'
+            : /placeholder/i.test(message) ? 'placeholder_response'
+            : /fetch|HTTP|network/i.test(message) ? 'request_failed' : 'search_failed';
+          job.finishedAt = new Date().toISOString();
+          job.error='Initial search failed. No detail requests or listing writes were made.';
+        });
         return sendJson(res, 202, job);
       }
       if (pathname === "/facebook/search" && req.method === "POST") {
