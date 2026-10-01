@@ -830,6 +830,20 @@ export class FacebookGraphqlClient {
         body: body.toString()
       });
     } catch (error) {
+      if (error.facebookResponse && docId === MARKETPLACE_SEARCH_DOC_ID && this.lastSearchInspection?.state === 'running') {
+        const rejected = error.facebookResponse;
+        const raw = await rejected.clone().text();
+        this.lastSearchInspection.transport = {
+          operation, docId, httpStatus: rejected.status,
+          contentType: rejected.headers.get('content-type'), bodyLength: raw.length
+        };
+        try {
+          const start = raw.indexOf('{');
+          this.lastSearchInspection.response = sanitizeFacebookEvidence(JSON.parse(start > 0 ? raw.slice(start) : raw), session);
+        } catch {
+          this.lastSearchInspection.responseParseFailed = true;
+        }
+      }
       // The shared limiter recognizes HTTP-200 GraphQL throttles before this
       // client parses the response. Preserve that behavior while recording
       // which operation Facebook rejected in the run's error message.

@@ -63,7 +63,11 @@ export function createFacebookRequestLimiter({ now = Date.now, sleep = ms => new
         const until = Math.max(now() + backoff, hasRetryTime ? retryDate : 0);
         blockedUntil = Math.max(blockedUntil, until);
         if (store) await store.write(blockedUntil, { retryAfter: hasRetryTime, strikes, lastLimitedAt });
-        throw cooldownError(blockedUntil);
+        const error = cooldownError(blockedUntil);
+        // Keep the response in memory for the client's sanitized diagnostic.
+        // Non-enumerable so generic error serialization cannot expose it.
+        Object.defineProperty(error, 'facebookResponse', {value: response});
+        throw error;
       }
       return response;
     });

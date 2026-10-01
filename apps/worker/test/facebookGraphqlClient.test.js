@@ -360,3 +360,26 @@ test("logged-out inspection explicitly disables environment Chrome cookie extrac
     else process.env.FB_USE_CHROME_COOKIES = previous;
   }
 });
+
+test("shared limiter rejection retains sanitized search response and enforces cooldown", async () => {
+  const {createFacebookRequestLimiter} = await import('../src/facebookRequestLimiter.js');
+  const schedule = createFacebookRequestLimiter({now:()=>1000, sleep:async()=>{}});
+  const client = new FacebookGraphqlClient({useChromeCookies:false, scheduleRequest:schedule});
+  const session = {cookieHeader:'', fbDtsg:'private-token', lsd:'private-lsd'};
+  client.ensureSession = async () => {client.session=session; return session;};
+  client.request = async () => schedule(async () => new Response(JSON.stringify({
+    errors:[{code:1675004,message:'Rate limit exceeded private-token'}], fb_dtsg:'private-token'
+  }), {status:200,headers:{'content-type':'text/html'}}));
+  await assert.rejects(client.searchListings({query:'corvette',limit:25}), error => {
+    assert.equal(error.code,'FACEBOOK_COOLDOWN');
+    assert.equal(Object.keys(error).includes('facebookResponse'),false);
+    return true;
+  });
+  assert.equal(client.lastSearchInspection.transport.httpStatus,200);
+  assert.equal(client.lastSearchInspection.response.errors[0].code,1675004);
+  assert.equal(JSON.stringify(client.lastSearchInspection).includes('private-token'),false);
+  assert.equal((await schedule.status()).paused,true);
+  let requested=false;
+  await assert.rejects(schedule(async()=>{requested=true;}), {code:'FACEBOOK_COOLDOWN'});
+  assert.equal(requested,false);
+});
