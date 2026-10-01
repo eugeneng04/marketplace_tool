@@ -1,15 +1,13 @@
 services:
   - type: web
     name: resale-intelligence
-    runtime: node
+    runtime: docker
     plan: free
-    buildCommand: npm install
-    startCommand: npm --workspace @resale-intelligence/worker start
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     healthCheckPath: /health
     autoDeploy: true
     envVars:
-      - key: NODE_VERSION
-        value: 22
       - key: NODE_ENV
         value: production
       - key: SCHEDULER_ENABLED

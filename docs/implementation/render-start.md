@@ -15,7 +15,9 @@ Local development retains the internal scheduler by default.
    in Neon's Connect dialog). The scheduler uses a session advisory lock and must
    not use Neon's transaction-mode pooled endpoint.
 3. In Render, create a Blueprint from this repository using `render.yaml`.
-   It creates one Free Node web service and no Render database or paid services.
+   It creates one Free Docker web service and no Render database or paid services.
+   The Dockerfile uses Playwright 1.63.0's official Ubuntu image, matching the
+   worker's pinned `playwright-core` version. It serves the same Node UI/API.
 4. Enter the Neon string as DATABASE_URL using Render's private environment settings.
    No FB_COOKIE is required; the connector defaults to logged-out page tokens. Start in mock mode if
    you want to verify deployment without live Facebook access.
@@ -34,6 +36,14 @@ Local development retains the internal scheduler by default.
    Facebook may restrict logged-out searches from a hosting IP.
 
 ## Free-tier operation and limitations
+
+- For an existing Blueprint-managed Node service, sync the updated Blueprint to
+  change its runtime to Docker. Pushing code alone does not change the runtime.
+  Keep the existing service, URL, and private environment values. The container
+  build never includes `.env` files or Facebook cookies.
+- `Test Facebook browser` runs a bounded, temporary browser diagnostic. It does
+  not write listings or replace the GraphQL collector. A successful browser test
+  is still required before using this runtime for collection.
 
 - `FB_MAX_REQUESTS_PER_MINUTE` is enforced across all Facebook clients in one
   worker process, including token-page, search, location, detail, and photo

@@ -8,8 +8,9 @@
 | Local GraphQL client with configured Facebook cookie | Successful Marketplace search; three parsed listings; two requests |
 | Local GraphQL client with no cookies | Successful Marketplace search; three parsed listings; two requests |
 | One deployed `corvette` / Milpitas / 100-mile saved search | Failed with code `1675004: Rate limit exceeded`, rejected operation `Marketplace search`; zero results and zero detail pages |
-| Chromium browser on Render with its configured cookie | Browser launched; Marketplace returned HTTP 302; final page was `login_required`; zero visible listings |
-| Safe session comparison | Render has both `c_user` and `xs`, but their combined SHA-256 fingerprint does not match local |
+| Chromium browser on Render before cookie refresh | Browser launched; Marketplace returned HTTP 302; final page was `login_required`; zero visible listings |
+| Safe session comparison before cookie refresh | Render has both `c_user` and `xs`, but their combined SHA-256 fingerprint did not match local |
+| Chromium browser after user refreshed cookie | Marketplace redirect led to HTTP 200; browser or page closed during listing observation; zero listings |
 
 Local requests were paced at three per minute, with a maximum of three requests per scenario. Both scenarios used the same client and document ID, requesting `corvette` around approximate Milpitas coordinates (37.4323, -121.8996), radius 161 km, result limit three. Both returned rich GraphQL cards, without needing the HTML search fallback. No credentials or listing payloads were saved in the diagnostic output.
 
@@ -39,4 +40,20 @@ An environment-dependent Facebook restriction is the leading hypothesis. Render 
 
 The tests do not isolate outbound IP from cookie/session context or runtime differences. Local execution used Node 24.19.0; the browser deployment used Node 22.23.3. The browser search used the account's default location, while the local GraphQL test specified Milpitas. Because the sessions demonstrably differ, an IP-only diagnosis is premature.
 
-The next step is for the user to refresh Render's `FB_COOKIE` with the working session through Render's environment settings, redeploy, and repeat the bounded browser and GraphQL checks. Changing the authentication credential in the dashboard requires the user to complete the entry and submission. If the same session still redirects or the search remains rate limited, a persistent cloud browser session or another cloud host remains an experiment, with no guarantee of Facebook acceptance.
+The user subsequently refreshed Render's cookie. The new session has not been compared with local using the fingerprint helper; the earlier mismatch does not establish a current mismatch.
+
+## Tests after cookie refresh
+
+The original output at `2026-09-30T06:05:13.513Z` recorded only a Marketplace HTTP 302 and a generic navigation failure. Redirect observation was incomplete. Commit `537e009` added safe redirect and network-error categories, avoided reading document redirect bodies, and prevented aborting routes already continued. All 106 worker tests passed.
+
+The rerun at `06:13:29.745Z` recorded a Marketplace HTTP 302 redirect to another Marketplace URL, followed by HTTP 200. It failed without visible listings. Commit `748f042` then distinguished browser closure, page crashes, and navigation interruption, and recorded the stage of failure. Its rerun at `06:18:18.634Z` finished at `06:18:50.534Z` with `navigationFailureCode: browser_or_page_closed` and `failureStage: observe_listings`. Neither run recorded a login redirect, GraphQL rate-limit response, or visible listings. HTTP 200 does not by itself establish a valid session or successful collection.
+
+The Render dashboard confirms a 512 MB memory limit. Memory/CPU usage graphs are unavailable on this free service; the dashboard requires paid compute to view them. The Chromium package recommends 1600 MB or more ([package documentation](https://github.com/Sparticuz/chromium)). Memory exhaustion is a plausible cause of browser closure, but has not yet been confirmed. Commit `0b8a2ef` adds cgroup v2 memory counters before and after the diagnostic to detect container OOM kills without exposing credentials. All 12 browser diagnostic tests passed.
+
+The memory-counter rerun (`06:26:33.549Z` to `06:27:01.302Z`) reproduced HTTP 302 → HTTP 200 → browser/page closure during listing observation. Container `oom`, `oom_kill`, and `oom_group_kill` remained zero; `oomKillDelta` was zero. Memory was 56,721,408 bytes before launch and 413,315,072 bytes after failure, against a 536,870,912-byte limit. These endpoint snapshots are not peak usage, but there is no evidence of a container OOM kill. The full worker suite passed 108 tests.
+
+Commit `838de9f` tests removing Chromium's `--single-process` launch flag on Render. Chromium documents that this mode couples renderer crashes to loss of the browser process ([process model documentation](https://chromium.googlesource.com/playground/chromium-org-site/+/refs/heads/main/developers/design-documents/process-models.md)). This is a runtime experiment, not a proven explanation or Facebook-access workaround.
+
+The multiprocess rerun (`06:29:37.194Z` to `06:30:04.203Z`) again recorded Marketplace HTTP 302 → HTTP 200. This time Playwright emitted `pageCrashed: true` and `navigationFailureCode: page_crashed` during listing observation, while the container OOM counters remained zero. Memory after failure was 444,993,536 bytes. Removing single-process mode isolated the failure to the renderer but did not fix it.
+
+The deployed collector still does not work end to end. The current browser blocker is a confirmed renderer crash, with its root cause still unknown. The next runtime comparison should use Playwright's matching Chromium distribution in a supported container, rather than the Lambda Chromium package. A paid memory upgrade is not yet justified by an observed OOM kill; Facebook acceptance still needs a separate successful search test.

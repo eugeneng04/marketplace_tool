@@ -120,12 +120,11 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
       job.memoryBefore = await readMemory();
       if (launch) browser = await launch();
       else {
-        const [{chromium:playwright}, {default:chromium}] = await Promise.all([
-          import('playwright-core'), import('@sparticuz/chromium')
-        ]);
-        // Render is a long-running container, not Lambda. Single-process mode
-        // couples renderer failures to the whole browser and is unstable here.
-        browser = await playwright.launch({args:chromium.args.filter(arg=>arg !== '--single-process'), executablePath:await chromium.executablePath(), timeout:30_000});
+        const {chromium} = await import('playwright-core');
+        job.browserDistribution = 'playwright-chromium';
+        // Use Playwright's matching full Chromium in the container, without
+        // the Lambda package's custom launch flags or headless-shell binary.
+        browser = await chromium.launch({channel:'chromium', headless:true, timeout:30_000});
       }
       job.browserVersion = browser.version();
       const context = await browser.newContext({viewport:{width:1280,height:900}, locale:'en-US', serviceWorkers:'block'});
