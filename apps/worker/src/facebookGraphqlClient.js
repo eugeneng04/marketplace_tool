@@ -880,6 +880,7 @@ export class FacebookGraphqlClient {
     this.lastSearchInspection = {
       state: 'running', query: params.query, startedAt: new Date().toISOString(), detailRequests: 0,
       session: { configuredCookie: Boolean(this.cookieHeader), chromeCookiesEnabled: this.useChromeCookies },
+      requestVariables: buildSearchVariables(params),
       fallback: { attempted: false, reason: 'search_response_unavailable' }
     };
     try {

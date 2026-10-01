@@ -356,6 +356,10 @@ export async function createApp() {
       if (pathname === '/facebook/search-inspection' && req.method === 'POST') {
         if (searchInspection.state === 'running') return sendJson(res, 202, searchInspection);
         if (Date.now() - lastInspectionStarted < 300000) return sendJson(res, 429, {error:'Wait five minutes between inspections.'});
+        const body = parseJsonBody(await readBody(req));
+        if (body.newestWithinDays !== undefined && ![1, 7, 30].includes(body.newestWithinDays)) {
+          return sendJson(res, 400, {error:'Inspection freshness must be 1, 7, or 30 days.'});
+        }
         const profiles = await listProfiles(db);
         const profile = profiles.find(p=>/corvette/i.test(p.query)) ?? profiles.find(p=>p.enabled);
         if (!profile) return sendJson(res, 400, {error:'Save a search first.'});
@@ -363,12 +367,14 @@ export async function createApp() {
         const input = parseFacebookSearchInput({query:profile.query,latitude:filters.latitude ?? filters.lat,
           longitude:filters.longitude ?? filters.lng ?? filters.lon,radiusKm:filters.radiusKm ?? Math.round(profile.radiusMiles*1.60934),
           minPrice:profile.minPrice,maxPrice:profile.maxPrice,category:filters.facebookCategoryId,limit:config.maxCardsPerRun});
-        input.newestWithinDays = filters.newestWithinDays ?? 1;
+        input.newestWithinDays = body.newestWithinDays ?? filters.newestWithinDays ?? 1;
         input.searchUrl = filters.searchUrl;
         input.location = profile.location;
         lastInspectionStarted = Date.now();
         searchInspection = {state:'running',query:profile.query,startedAt:new Date().toISOString(),detailRequests:0};
         const job = searchInspection;
+        job.savedNewestWithinDays = filters.newestWithinDays ?? 1;
+        job.inspectionNewestWithinDays = input.newestWithinDays;
         const inspectionClient = connector.client ?? facebookGraphqlClient;
         void inspectionClient.searchListings(input).then(result=>{
           Object.assign(job, inspectionClient.lastSearchInspection ?? {});

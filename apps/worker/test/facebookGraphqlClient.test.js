@@ -210,6 +210,7 @@ test("an empty Marketplace feed that advertises another page fails instead of re
     error => {
       assert.match(error.message, /empty Marketplace feed while reporting more pages/);
       assert.equal(error.searchInspection.state, 'failed');
+      assert.equal(error.searchInspection.requestVariables.params.browse_request_params.commerce_search_and_rp_ctime_days, 1);
       assert.deepEqual(error.searchInspection.response.data.marketplace_search.feed_units.edges, []);
       assert.equal(error.searchInspection.diagnostics.edgeCount, 0);
       assert.equal(error.searchInspection.hasNextPage, true);
@@ -334,4 +335,14 @@ test("rejected search retains sanitized HTTP and GraphQL evidence", async () => 
   for (const secret of ['private-cookie', 'private-token', 'private-lsd', 'access_token', 'fb_dtsg', '123456789']) {
     assert.equal(serialized.includes(secret), false, secret);
   }
+});
+
+
+test("diagnostic records the exact widened freshness request", async () => {
+  const client = new FacebookGraphqlClient({useChromeCookies:false});
+  let sent;
+  client.graphqlRequest = async (_doc, variables) => {sent = variables; return {data:{marketplace_search:{feed_units:{edges:[],page_info:{has_next_page:false}}}}};};
+  await client.searchListings({query:'corvette',latitude:37.4,longitude:-121.9,radiusKm:161,limit:25,newestWithinDays:7});
+  assert.deepEqual(client.lastSearchInspection.requestVariables, sent);
+  assert.equal(sent.params.browse_request_params.commerce_search_and_rp_ctime_days, 7);
 });

@@ -1122,7 +1122,7 @@ function bindEvents() {
   $("#profileGenerationInput").addEventListener("change", (event) => chooseProfileGeneration(event.target.value));
   $("#refreshButton").addEventListener("click", refreshAll);
   $("#refreshRunsButton").addEventListener("click", loadRuns);
-  $('#searchInspectionButton').addEventListener('click', async (event) => {
+  const inspectHttpSearch = async (event) => {
     const button = event.currentTarget;
     const output = $('#searchInspectionResult');
     button.disabled = true;
@@ -1130,8 +1130,9 @@ function bindEvents() {
     output.textContent = 'Inspecting one HTTP search; no detail requests or listing writes…';
     try {
       let report = await api('/facebook/search-inspection');
-      if (report.state !== 'finished') {
-        report = await api('/facebook/search-inspection', {method:'POST',body:'{}'});
+      const weekComparison = button.id === 'searchInspectionWeekButton';
+      if (weekComparison || report.state !== 'finished') {
+        report = await api('/facebook/search-inspection', {method:'POST',body:JSON.stringify(weekComparison ? {newestWithinDays:7} : {})});
       }
       const deadline = Date.now()+120000;
       while (report.state === 'running' && Date.now() < deadline) {
@@ -1141,7 +1142,9 @@ function bindEvents() {
       output.textContent = JSON.stringify(report,null,2);
     } catch (error) { output.textContent = error.message; }
     finally { button.disabled = false; }
-  });
+  };
+  $('#searchInspectionButton').addEventListener('click', inspectHttpSearch);
+  $('#searchInspectionWeekButton').addEventListener('click', inspectHttpSearch);
   $("#browserTestButton").addEventListener("click", async (event) => {
     const button = event.currentTarget;
     const output = $("#browserTestResult");
