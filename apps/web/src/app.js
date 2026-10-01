@@ -1129,7 +1129,10 @@ function bindEvents() {
     output.hidden = false;
     output.textContent = 'Inspecting one HTTP search; no detail requests or listing writes…';
     try {
-      let report = await api('/facebook/search-inspection', {method:'POST',body:'{}'});
+      let report = await api('/facebook/search-inspection');
+      if (report.state !== 'finished') {
+        report = await api('/facebook/search-inspection', {method:'POST',body:'{}'});
+      }
       const deadline = Date.now()+120000;
       while (report.state === 'running' && Date.now() < deadline) {
         await new Promise(resolve=>setTimeout(resolve,3000));

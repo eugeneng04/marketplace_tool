@@ -1,4 +1,5 @@
 import { scheduleFacebookRequest } from "./facebookRequestLimiter.js";
+import { inspectSearchPayload } from "./facebookSearchInspection.js";
 import crypto from "node:crypto";
 import { execFileSync, execSync } from "node:child_process";
 import os from "node:os";
@@ -827,6 +828,17 @@ export class FacebookGraphqlClient {
   async searchListings(params) {
     const data = await this.graphqlRequest(MARKETPLACE_SEARCH_DOC_ID, buildSearchVariables(params));
     const result = parseSearchResponse(data, params.limit);
+    const initialGraphqlFields = inspectSearchPayload(data);
+    const inspection = {
+      state: 'finished', query: params.query, finishedAt: new Date().toISOString(),
+      detailRequests: 0, cardSource: 'graphql', listingCount: result.listings.length,
+      initialGraphqlFields,
+      listingFields: inspectSearchPayload({listings: result.listings.map(listing => listing.raw)}),
+      basicListings: result.listings.map(({raw, ...listing}) => listing)
+    };
+    // Persist the structural inventory with normal runs, without example values.
+    result.diagnostics = {...result.diagnostics,
+      initialSearchFields: initialGraphqlFields.map(({example, ...field}) => field)};
     // Facebook can return complete edge cards and also repeat their IDs in the
     // pagination cursor. Only fall back when there are placeholders but no
     // rich cards to use; otherwise the extra cursor IDs needlessly trigger a
@@ -868,6 +880,11 @@ export class FacebookGraphqlClient {
       }
       const pageListings = parseMarketplaceSearchHtml(html, params.limit);
       if (pageListings.length) {
+        inspection.cardSource = 'marketplace_search_page';
+        inspection.listingCount = pageListings.length;
+        inspection.listingFields = inspectSearchPayload({listings: pageListings.map(listing => listing.raw)});
+        inspection.basicListings = pageListings.map(({raw, ...listing}) => listing);
+        this.lastSearchInspection = inspection;
         return {
           listings: pageListings,
           hasNextPage: result.hasNextPage,
@@ -880,6 +897,7 @@ export class FacebookGraphqlClient {
     if (result.listings.length === 0 && result.hasNextPage) {
       throw new Error("Facebook returned an empty Marketplace feed while reporting more pages. The search response is incomplete; verify the Facebook session and Marketplace GraphQL response before treating this run as successful.");
     }
+    this.lastSearchInspection = inspection;
     return result;
   }
 

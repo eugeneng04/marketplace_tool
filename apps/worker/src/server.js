@@ -348,7 +348,7 @@ export async function createApp() {
         return sendJson(res, 202, await browserDiagnostic.start({mode, expectedSessionHash:body.expectedSessionHash}));
       }
       if (pathname === '/facebook/search-inspection' && req.method === 'GET') {
-        return sendJson(res, 200, searchInspection);
+        return sendJson(res, 200, connector.client?.lastSearchInspection ?? searchInspection);
       }
       if (pathname === '/facebook/search-inspection' && req.method === 'POST') {
         if (searchInspection.state === 'running') return sendJson(res, 202, searchInspection);
@@ -366,14 +366,9 @@ export async function createApp() {
         lastInspectionStarted = Date.now();
         searchInspection = {state:'running',query:profile.query,startedAt:new Date().toISOString(),detailRequests:0};
         const job = searchInspection;
-        const inspectionClient = buildFacebookGraphqlClient(config);
-        const graphql = inspectionClient.graphqlRequest.bind(inspectionClient);
-        inspectionClient.graphqlRequest = async (...args) => {
-          const payload = await graphql(...args);
-          job.initialGraphqlFields = inspectSearchPayload(payload);
-          return payload;
-        };
+        const inspectionClient = connector.client ?? facebookGraphqlClient;
         void inspectionClient.searchListings(input).then(result=>{
+          job.initialGraphqlFields = inspectionClient.lastSearchInspection?.initialGraphqlFields;
           job.listingCount = result.listings.length;
           job.hasNextPage = result.hasNextPage;
           job.cardSource = result.diagnostics?.cardSource ?? 'graphql';
