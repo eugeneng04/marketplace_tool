@@ -753,6 +753,7 @@ export async function createApp() {
       return sendJson(res, 404, { error: "Route not found" });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unexpected error";
+      if (error?.code === "COLLECTION_BUSY") return sendJson(res, 409, { error: message });
       if (error?.code === "FACEBOOK_COOLDOWN") {
         res.setHeader("Retry-After", Math.max(1, Math.ceil((error.retryAt - Date.now()) / 1000)));
         return sendJson(res, 429, { error: message, retryAt: new Date(error.retryAt).toISOString() });

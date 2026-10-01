@@ -270,6 +270,19 @@ export function parseSearchResponse(data, limit = 25) {
         "",
       imageUrl: listing.primary_listing_photo?.image?.uri ?? listing.image?.uri ?? "",
       sellerName: listing.marketplace_listing_seller?.name ?? "",
+      sellerId: listing.marketplace_listing_seller?.id ?? "",
+      customTitle: listing.custom_title ?? "",
+      subtitles: (listing.custom_sub_titles_with_rendering_flags ?? []).map(entry => entry.subtitle).filter(Boolean),
+      mileage: extractMarketplaceMileage(listing),
+      vehicleAttributes: extractMarketplaceVehicleAttributes(listing),
+      previousPrice: listing.strikethrough_price?.formatted_amount ?? "",
+      categoryId: listing.marketplace_listing_category_id ?? "",
+      deliveryTypes: listing.delivery_types ?? [],
+      videoIds: (listing.pre_recorded_videos ?? []).map(video => video.id).filter(Boolean),
+      isSold: listing.is_sold,
+      isLive: listing.is_live,
+      isHidden: listing.is_hidden,
+      isViewerSeller: listing.is_viewer_seller,
       postedDate: listing.creation_time ? new Date(listing.creation_time * 1000).toISOString() : "",
       url: `https://www.facebook.com/marketplace/item/${id}/`,
       isPending: listing.is_pending ?? false,
@@ -511,10 +524,12 @@ export function parseListingDetailResponse(data, listingId) {
     url: target.share_uri ?? `https://www.facebook.com/marketplace/item/${listingId}/`,
     isPending: target.is_pending ?? false,
     isSold: target.is_sold ?? false,
-    condition: (target.attribute_data ?? []).find((attribute) => /condition/i.test(attribute?.attribute_name ?? ""))?.label ?? "",
+    condition: target.condition ?? (target.attribute_data ?? []).find((attribute) => /condition/i.test(attribute?.attribute_name ?? ""))?.label ?? "",
+    currency: target.listing_price?.currency ?? "",
     mileage,
     vehicleAttributes,
     seller: { name: sellerName, profileUrl: "" },
+    sellerId: target.marketplace_listing_seller?.id ?? "",
     raw: target
   };
 }
@@ -550,6 +565,15 @@ function extractMarketplaceVehicleAttributes(target) {
     }
   };
   visit(target);
+  // These keys were verified in a live Marketplace detail response.
+  for (const [field, key] of Object.entries({
+    make: "vehicle_make_display_name", model: "vehicle_model_display_name",
+    trim: "vehicle_trim_display_name", transmission: "vehicle_transmission_type",
+    exterior_color: "vehicle_exterior_color", interior_color: "vehicle_interior_color",
+    fuel_type: "vehicle_fuel_type", number_of_owners: "vehicle_number_of_owners",
+    paid_off: "vehicle_is_paid_off", seller_type: "vehicle_seller_type"
+  })) put(field, target?.[key]);
+  if (target?.vehicle_odometer_data?.unit === "MILES") put("mileage", target.vehicle_odometer_data.value);
   if (result.mileage) result.mileage = numericMileage(result.mileage) ?? result.mileage;
   if (result.vehicle_mileage) result.mileage = numericMileage(result.vehicle_mileage) ?? result.mileage;
   if (result.transmission) result.transmission = normalizeTransmission(result.transmission);
@@ -583,6 +607,16 @@ function numericMileage(value) {
 }
 
 function extractMarketplaceMileage(target) {
+  if (target?.vehicle_odometer_data?.unit === "MILES") {
+    const mileage = numericMileage(target.vehicle_odometer_data.value);
+    if (mileage !== null) return mileage;
+  }
+  for (const entry of target?.custom_sub_titles_with_rendering_flags ?? []) {
+    const subtitle = `${entry?.subtitle ?? ""}`.trim();
+    if (!/^[\d,.]+\s*k?\s*(?:miles?|mi)$/i.test(subtitle)) continue;
+    const mileage = numericMileage(subtitle);
+    if (mileage !== null) return mileage;
+  }
   const seen = new Set();
   const visit = (value, hinted = false) => {
     if (!value || typeof value !== "object" || seen.has(value)) return null;
@@ -649,7 +683,7 @@ export class FacebookGraphqlClient {
     this.searchBaseUrl = options.facebookSearchBaseUrl ?? MARKETPLACE_SEARCH_URL;
     this.session = null;
     this.reqCounter = 0;
-    this.requestsPerMinute = Number(options.facebookMaxRequestsPerMinute ?? process.env.FB_MAX_REQUESTS_PER_MINUTE ?? 10);
+    this.requestsPerMinute = Number(options.facebookMaxRequestsPerMinute ?? process.env.FB_MAX_REQUESTS_PER_MINUTE ?? 3);
     if (!Number.isFinite(this.requestsPerMinute) || this.requestsPerMinute <= 0) {
       throw new Error("FB_MAX_REQUESTS_PER_MINUTE must be a positive number.");
     }

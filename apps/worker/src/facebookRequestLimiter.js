@@ -1,6 +1,7 @@
-// Facebook often omits Retry-After from GraphQL throttling errors. A missing
-// header must not turn one rejection into an hour-long application outage.
+// Start with five minutes, then extend repeated throttles up to one hour.
 export const FACEBOOK_COOLDOWN_MS = 5 * 60 * 1000;
+const MAX_COOLDOWN_MS = 60 * 60 * 1000;
+const BACKOFF_RESET_MS = 24 * 60 * 60 * 1000;
 
 function cooldownError(until) {
   const error = new Error(`Facebook rate limit reached. Facebook requests are paused until ${new Date(until).toISOString()}. Existing listings remain available; retry after the stated time.`);
@@ -29,11 +30,13 @@ export function createFacebookRequestLimiter({ now = Date.now, sleep = ms => new
   let queue = Promise.resolve();
   let nextRequestAt = 0;
   let blockedUntil = 0;
+  let strikes = 0;
+  let lastLimitedAt = 0;
   async function checkCooldown() {
     if (store) blockedUntil = Math.max(blockedUntil, Number(await store.read()) || 0);
     if (blockedUntil > now()) throw cooldownError(blockedUntil);
   }
-  function schedule(request, requestsPerMinute = 20) {
+  function schedule(request, requestsPerMinute = 3) {
     const rate = Number(requestsPerMinute);
     if (!Number.isFinite(rate) || rate <= 0) throw new Error('FB_MAX_REQUESTS_PER_MINUTE must be a positive number.');
     const result = queue.then(async () => {
@@ -48,9 +51,18 @@ export function createFacebookRequestLimiter({ now = Date.now, sleep = ms => new
         const seconds = retryAfter == null ? NaN : Number(retryAfter);
         const retryDate = Number.isFinite(seconds) ? now() + seconds * 1000 : Date.parse(retryAfter);
         const hasRetryTime = Number.isFinite(retryDate) && retryDate > now();
-        const until = hasRetryTime ? retryDate : now() + FACEBOOK_COOLDOWN_MS;
+        const previous = await store?.readBackoff?.();
+        if (previous) {
+          strikes = Number(previous.strikes) || 0;
+          lastLimitedAt = Number(previous.lastLimitedAt) || 0;
+        }
+        if (now() - lastLimitedAt >= BACKOFF_RESET_MS) strikes = 0;
+        strikes = Math.min(strikes + 1, 5);
+        lastLimitedAt = now();
+        const backoff = Math.min(MAX_COOLDOWN_MS, FACEBOOK_COOLDOWN_MS * 2 ** (strikes - 1));
+        const until = Math.max(now() + backoff, hasRetryTime ? retryDate : 0);
         blockedUntil = Math.max(blockedUntil, until);
-        if (store) await store.write(blockedUntil, { retryAfter: hasRetryTime });
+        if (store) await store.write(blockedUntil, { retryAfter: hasRetryTime, strikes, lastLimitedAt });
         throw cooldownError(blockedUntil);
       }
       return response;
@@ -74,12 +86,19 @@ export async function configureFacebookCooldown(db) {
       const result = await db.pool.query("SELECT value_json FROM app_settings WHERE key = 'facebook_cooldown'");
       return Number(result.rows[0]?.value_json?.until) || 0;
     },
-    async write(until, { retryAfter = false } = {}) {
+    async readBackoff() {
+      const result = await db.pool.query("SELECT value_json FROM app_settings WHERE key = 'facebook_cooldown'");
+      return result.rows[0]?.value_json ?? null;
+    },
+    async write(until, { retryAfter = false, strikes, lastLimitedAt } = {}) {
+      const value = { until, retryAfter };
+      if (strikes !== undefined) value.strikes = strikes;
+      if (lastLimitedAt !== undefined) value.lastLimitedAt = lastLimitedAt;
       await db.pool.query(`INSERT INTO app_settings(key,value_json,updated_at)
-        VALUES ('facebook_cooldown',jsonb_build_object('until',$1::bigint,'retryAfter',$2::boolean),NOW())
-        ON CONFLICT(key) DO UPDATE SET value_json=jsonb_build_object('until',GREATEST(
-          COALESCE((app_settings.value_json->>'until')::bigint,0),$1::bigint),
-          'retryAfter',$2::boolean),updated_at=NOW()`, [until, retryAfter]);
+        VALUES ('facebook_cooldown',$2::jsonb,NOW())
+        ON CONFLICT(key) DO UPDATE SET value_json=app_settings.value_json || $2::jsonb ||
+          jsonb_build_object('until',GREATEST(COALESCE((app_settings.value_json->>'until')::bigint,0),$1::bigint)),
+          updated_at=NOW()`, [until, JSON.stringify(value)]);
     }
   };
   // Previous releases stored the application's one-hour fallback exactly like

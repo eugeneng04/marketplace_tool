@@ -13,10 +13,9 @@ import { parsePrice } from "./utils.js";
 import { parseVehicleListing } from "./vehicleParser.js";
 
 const DEFAULT_STALE_DETAIL_HOURS = 24;
-const DETAIL_FETCH_CONCURRENCY = 5;
-// Marketplace detail is one extra GraphQL call per listing. Drip it over
-// consecutive runs so search results stay useful without firing a burst.
-const DETAIL_FETCH_LIMIT_PER_RUN = 3;
+// Process the detail queue in order; the shared Facebook limiter spaces
+// requests and stops them during its persistent cooldown.
+const DETAIL_FETCH_CONCURRENCY = 1;
 
 function cardNeedsDetail(card) {
   return !card.titleRaw || /^Marketplace listing(?:\s|$)/i.test(card.titleRaw.trim());
@@ -100,7 +99,26 @@ export function matchesProfileFilters(profile, raw) {
   return true;
 }
 
-export async function runProfileSync({ db, connector, profile, preferManualTransmission, dbOps = {} }) {
+export async function runProfileSync(args) {
+  // The same database lock covers scheduled, manual and CLI collection runs,
+  // including workers in separate processes. Use a dedicated session.
+  if (!args.db.pool?.connect) return runProfileSyncUnlocked(args);
+  const client = await args.db.pool.connect();
+  try {
+    const result = await client.query("SELECT pg_try_advisory_lock(72819463) AS locked");
+    if (!result.rows[0].locked) {
+      const error = new Error("A collection run is already active. Wait for it to finish before starting another.");
+      error.code = "COLLECTION_BUSY";
+      throw error;
+    }
+    return await runProfileSyncUnlocked(args);
+  } finally {
+    // Destroying the connection releases the lock even after an error.
+    client.release(true);
+  }
+}
+
+async function runProfileSyncUnlocked({ db, connector, profile, preferManualTransmission, dbOps = {} }) {
   const ops = {
     startSearchRun,
     finishSearchRun,
@@ -132,7 +150,7 @@ export async function runProfileSync({ db, connector, profile, preferManualTrans
   try {
     const captured = await connector.captureListingCards(profile);
     summary.diagnostics = captured.sourceMetadata?.diagnostics ?? null;
-    let detailFetchesScheduled = 0;
+    let detailError = null;
 
     const preparedItems = await mapWithConcurrency(captured.cards, DETAIL_FETCH_CONCURRENCY, async (card) => {
       const cardRaw = connector.normalizeCardToRawSourceItem(card, captured.capturedAt);
@@ -162,49 +180,44 @@ export async function runProfileSync({ db, connector, profile, preferManualTrans
         return { card, raw: cardRaw, skipped: true };
       }
 
-      // Search cards contain photos and basic fields, but not seller
-      // descriptions. Enrich a small number of new/incomplete cards each run;
-      // the shared request limiter paces them and saved detail data prevents
-      // repeated calls on subsequent runs.
-      const filters = profile.filtersJson ?? {};
-      const detailDependentFilters = Boolean(
-        filters.transmission || filters.maxMileage || filters.cleanTitleOnly || filters.modifiedOnly
-      );
+      // Every eligible new/incomplete card enters the paced detail queue.
+      // Cached details remain available for filtering and parsing repeat runs.
       const descriptionIsCardSummary = Boolean(
         refreshState?.description_raw?.trim() && card.rawCardText?.trim() &&
         refreshState.description_raw.trim() === card.rawCardText.trim()
       );
-      const detailIntervalHours = ["saved", "contacted"].includes(refreshState?.status)
-        ? Math.min(staleDetailHours, 12)
-        : staleDetailHours;
-      const detailRefreshDue = !refreshState || hoursSince(refreshState.last_scraped_at) >= detailIntervalHours;
-      const needsDetail = detailFetchesScheduled < DETAIL_FETCH_LIMIT_PER_RUN && detailRefreshDue &&
-        shouldFetchDetail(refreshState, staleDetailHours, { descriptionIsCardSummary }) &&
-        ((!refreshState) || (needsCardEnrichment && !hasCachedListing) || detailDependentFilters ||
-          hoursSince(refreshState.last_scraped_at) >= detailIntervalHours ||
-          descriptionIsCardSummary || !refreshState.description_raw?.trim() || !refreshState.image_urls?.length);
-      if (needsDetail) detailFetchesScheduled += 1;
-      const raw = needsDetail
-        ? await connector.fetchListingDetail(card)
-        : hasCachedListing
+      const needsDetail = !detailError && shouldFetchDetail(refreshState, staleDetailHours, { descriptionIsCardSummary });
+      const cachedAttributes = refreshState?.parsed_attributes_json ?? {};
+      let raw = refreshState
           ? {
               ...cardRaw,
-              titleRaw: refreshState.title_raw,
-              descriptionRaw: refreshState.description_raw ?? cardRaw.descriptionRaw,
-              priceRaw: refreshState.price_raw ?? cardRaw.priceRaw,
-              locationRaw: refreshState.location_raw ?? cardRaw.locationRaw,
-              imageUrls: Array.isArray(refreshState.image_urls) ? refreshState.image_urls : cardRaw.imageUrls,
-              sellerRaw: refreshState.seller_raw ?? cardRaw.sellerRaw,
+              titleRaw: hasCachedListing ? refreshState.title_raw : cardRaw.titleRaw,
+              descriptionRaw: descriptionIsCardSummary ? cardRaw.descriptionRaw : refreshState.description_raw ?? cardRaw.descriptionRaw,
+              priceRaw: cardRaw.priceRaw || refreshState.price_raw,
+              locationRaw: cardRaw.locationRaw || refreshState.location_raw,
+              imageUrls: cardRaw.imageUrls?.length ? cardRaw.imageUrls : refreshState.image_urls ?? [],
+              sellerRaw: cardRaw.sellerRaw || refreshState.seller_raw,
+              mileage: cardRaw.mileage ?? cachedAttributes.mileage,
+              vehicleAttributes: { ...(cachedAttributes.marketplaceAttributes ?? {}), ...(cardRaw.vehicleAttributes ?? {}) },
               sourceMetadata: {
+                ...(cachedAttributes.marketplaceMetadata ?? {}),
                 ...(cardRaw.sourceMetadata ?? {}),
-                postedDate: refreshState.posted_at ?? cardRaw.sourceMetadata?.postedDate,
+                postedDate: cardRaw.sourceMetadata?.postedDate || refreshState.posted_at,
                 cachedDetail: true
               }
             }
           : cardRaw;
       if (needsDetail) {
-        raw.sourceMetadata = { ...(raw.sourceMetadata ?? {}), detailFetched: true };
-        summary.detailPagesOpened += 1;
+        try {
+          raw = await connector.fetchListingDetail(card);
+          raw.sourceMetadata = { ...(raw.sourceMetadata ?? {}), detailFetched: true };
+          summary.detailPagesOpened += 1;
+        } catch (error) {
+          // Save the available cards/details before surfacing the interruption.
+          // Remaining cards issue no requests; incomplete saved items retry on
+          // the next search after the shared cooldown expires.
+          detailError = error;
+        }
       }
       return { card, raw };
     });
@@ -275,6 +288,7 @@ export async function runProfileSync({ db, connector, profile, preferManualTrans
       }
     }
 
+    if (detailError) throw detailError;
     summary.alertsCreated = await ops.finishSearchRun(db, run.id, summary, profile.id, qualifyingAlertItemIds);
     return { runId: run.id, ...summary };
   } catch (error) {

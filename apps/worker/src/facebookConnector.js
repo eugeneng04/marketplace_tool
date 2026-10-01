@@ -132,12 +132,25 @@ function listingToCard(listing, rank) {
     priceRaw: listing.price,
     locationRaw: listing.location,
     thumbnailUrl: listing.imageUrl,
+    mileage: listing.mileage,
+    vehicleAttributes: listing.vehicleAttributes ?? {},
     rawCardText: [listing.title, listing.price, listing.location, listing.sellerName].filter(Boolean).join(" "),
     sourceMetadata: {
       captureMode: "facebook_graphql",
       postedDate: listing.postedDate,
       isPending: listing.isPending,
       sellerName: listing.sellerName,
+      sellerId: listing.sellerId,
+      customTitle: listing.customTitle,
+      subtitles: listing.subtitles ?? [],
+      previousPrice: listing.previousPrice,
+      categoryId: listing.categoryId,
+      deliveryTypes: listing.deliveryTypes ?? [],
+      videoIds: listing.videoIds ?? [],
+      isSold: listing.isSold,
+      isLive: listing.isLive,
+      isHidden: listing.isHidden,
+      isViewerSeller: listing.isViewerSeller,
       raw: listing.raw
     }
   };
@@ -159,14 +172,17 @@ export function detailToRawSourceItem(detail, card) {
     locationRaw: detail.location || card?.locationRaw || undefined,
     imageUrls: detail.images?.length ? detail.images : [detail.imageUrl || card?.thumbnailUrl].filter(Boolean),
     sellerRaw: detail.seller?.name || detail.sellerName || card?.sourceMetadata?.sellerName || undefined,
-    mileage: detail.mileage ?? undefined,
-    vehicleAttributes: detail.vehicleAttributes ?? {},
+    mileage: detail.mileage ?? card?.mileage ?? undefined,
+    vehicleAttributes: { ...(card?.vehicleAttributes ?? {}), ...(detail.vehicleAttributes ?? {}) },
     capturedAt: new Date(),
     sourceMetadata: {
+      ...(card?.sourceMetadata ?? {}),
       captureMode: "facebook_graphql",
+      sellerId: detail.sellerId || card?.sourceMetadata?.sellerId || undefined,
+      currency: detail.currency || undefined,
       condition: detail.condition || undefined,
       isPending: detail.isPending ?? card?.sourceMetadata?.isPending,
-      isSold: detail.isSold ?? undefined,
+      isSold: detail.isSold ?? card?.sourceMetadata?.isSold,
       postedDate: detail.postedDate || card?.sourceMetadata?.postedDate || undefined
     }
   };
@@ -260,6 +276,8 @@ export function createFacebookGraphqlConnector({
         locationRaw: card.locationRaw,
         imageUrls: [card.thumbnailUrl].filter(Boolean),
         sellerRaw: card.sourceMetadata?.sellerName,
+        mileage: card.mileage,
+        vehicleAttributes: card.vehicleAttributes ?? {},
         capturedAt,
         sourceMetadata: {
           ...(card.sourceMetadata ?? {}),

@@ -77,7 +77,7 @@ export function loadConfig(env = process.env) {
     connectorMode: mergedEnv.CONNECTOR_MODE ?? "mock",
     facebookCookie: mergedEnv.FB_COOKIE ?? "",
     facebookSearchBaseUrl: mergedEnv.FB_SEARCH_BASE_URL ?? "https://www.facebook.com/marketplace/search/",
-    facebookMaxRequestsPerMinute: Number(mergedEnv.FB_MAX_REQUESTS_PER_MINUTE ?? 10),
+    facebookMaxRequestsPerMinute: Number(mergedEnv.FB_MAX_REQUESTS_PER_MINUTE ?? 3),
     facebookUserAgent:
       mergedEnv.FB_USER_AGENT ??
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",

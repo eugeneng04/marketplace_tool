@@ -79,6 +79,12 @@ export function parseVehicleListing(rawItem) {
   const merged = `${rawItem.titleRaw ?? ""} ${rawItem.descriptionRaw ?? ""}`.toLowerCase();
   const evidence = [];
   const attributes = {};
+  const metadata = rawItem.sourceMetadata ?? {};
+  const marketplaceMetadata = {};
+  for (const key of ["sellerId", "customTitle", "subtitles", "previousPrice", "categoryId", "deliveryTypes", "videoIds", "isPending", "isSold", "isLive", "isHidden", "isViewerSeller", "currency"]) {
+    if (metadata[key] !== undefined) marketplaceMetadata[key] = metadata[key];
+  }
+  if (Object.keys(marketplaceMetadata).length) attributes.marketplaceMetadata = marketplaceMetadata;
   if (rawItem.vehicleAttributes && typeof rawItem.vehicleAttributes === "object" && Object.keys(rawItem.vehicleAttributes).length) {
     attributes.marketplaceAttributes = rawItem.vehicleAttributes;
   }
@@ -105,6 +111,19 @@ export function parseVehicleListing(rawItem) {
         break;
       }
     }
+  }
+
+  // Prefer explicit Facebook vehicle fields to guesses from seller text.
+  for (const field of ["make", "model", "year", "trim", "condition"]) {
+    const value = rawItem.vehicleAttributes?.[field];
+    if (value === undefined || value === null || `${value}`.trim() === "") continue;
+    const normalized = field === "year" ? Number(value) : `${value}`.trim().toLowerCase();
+    if (field === "year" && (!Number.isInteger(normalized) || normalized < 1900 || normalized > 2100)) continue;
+    attributes[field] = normalized;
+    for (let index = evidence.length - 1; index >= 0; index -= 1) {
+      if (evidence[index].field === field) evidence.splice(index, 1);
+    }
+    addEvidence(evidence, field, normalized, 0.95, `Marketplace vehicle ${field} field`);
   }
 
   const mileageMatch =

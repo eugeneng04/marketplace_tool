@@ -613,7 +613,8 @@ export async function getItemRefreshState(db, identity) {
   const result = await db.pool.query(
     `
     SELECT id, status, title_raw, description_raw, price_raw, current_price,
-           location_raw, image_urls, seller_raw, posted_at, last_scraped_at, updated_at
+           location_raw, image_urls, seller_raw, posted_at, last_scraped_at, updated_at,
+           parsed_attributes_json
     FROM items
     WHERE ($1::TEXT IS NOT NULL AND normalized_url = $1)
        OR ($2::TEXT IS NOT NULL AND source = 'facebook_marketplace' AND source_item_id = $2)
