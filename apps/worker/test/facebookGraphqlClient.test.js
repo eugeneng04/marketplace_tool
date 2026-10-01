@@ -346,3 +346,17 @@ test("diagnostic records the exact widened freshness request", async () => {
   assert.deepEqual(client.lastSearchInspection.requestVariables, sent);
   assert.equal(sent.params.browse_request_params.commerce_search_and_rp_ctime_days, 7);
 });
+
+test("logged-out inspection explicitly disables environment Chrome cookie extraction", async () => {
+  const {createFacebookGraphqlClient} = await import('../src/facebookConnector.js');
+  const previous = process.env.FB_USE_CHROME_COOKIES;
+  process.env.FB_USE_CHROME_COOKIES = 'true';
+  try {
+    const client = createFacebookGraphqlClient({facebookCookie:'',useChromeCookies:false});
+    assert.equal(client.cookieHeader, '');
+    assert.equal(client.useChromeCookies, false);
+  } finally {
+    if (previous === undefined) delete process.env.FB_USE_CHROME_COOKIES;
+    else process.env.FB_USE_CHROME_COOKIES = previous;
+  }
+});

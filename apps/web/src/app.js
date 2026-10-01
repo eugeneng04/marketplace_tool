@@ -1130,9 +1130,10 @@ function bindEvents() {
     output.textContent = 'Inspecting one HTTP search; no detail requests or listing writes…';
     try {
       let report = await api('/facebook/search-inspection');
-      const weekComparison = button.id === 'searchInspectionWeekButton';
+      const weekComparison = button.id !== 'searchInspectionButton';
+      const mode = button.id === 'searchInspectionLoggedOutButton' ? 'logged_out' : 'configured';
       if (weekComparison || report.state !== 'finished') {
-        report = await api('/facebook/search-inspection', {method:'POST',body:JSON.stringify(weekComparison ? {newestWithinDays:7} : {})});
+        report = await api('/facebook/search-inspection', {method:'POST',body:JSON.stringify(weekComparison ? {newestWithinDays:7,mode} : {})});
       }
       const deadline = Date.now()+120000;
       while (report.state === 'running' && Date.now() < deadline) {
@@ -1145,6 +1146,7 @@ function bindEvents() {
   };
   $('#searchInspectionButton').addEventListener('click', inspectHttpSearch);
   $('#searchInspectionWeekButton').addEventListener('click', inspectHttpSearch);
+  $('#searchInspectionLoggedOutButton').addEventListener('click', inspectHttpSearch);
   $("#browserTestButton").addEventListener("click", async (event) => {
     const button = event.currentTarget;
     const output = $("#browserTestResult");

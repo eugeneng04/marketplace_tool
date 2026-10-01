@@ -375,7 +375,10 @@ export async function createApp() {
         const job = searchInspection;
         job.savedNewestWithinDays = filters.newestWithinDays ?? 1;
         job.inspectionNewestWithinDays = input.newestWithinDays;
-        const inspectionClient = connector.client ?? facebookGraphqlClient;
+        const inspectionClient = body.mode === 'logged_out'
+          ? createFacebookGraphqlClient({...config, facebookCookie:'', useChromeCookies:false})
+          : connector.client ?? facebookGraphqlClient;
+        job.mode = body.mode === 'logged_out' ? 'logged_out' : 'configured';
         void inspectionClient.searchListings(input).then(result=>{
           Object.assign(job, inspectionClient.lastSearchInspection ?? {});
           job.initialGraphqlFields = inspectionClient.lastSearchInspection?.initialGraphqlFields;

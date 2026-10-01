@@ -191,6 +191,7 @@ export function detailToRawSourceItem(detail, card) {
 export function createFacebookGraphqlClient(options = {}) {
   return new FacebookGraphqlClient({
     facebookCookie: options.facebookCookie,
+    useChromeCookies: options.useChromeCookies,
     facebookMaxRequestsPerMinute: options.facebookMaxRequestsPerMinute,
     facebookUserAgent: options.facebookUserAgent,
     facebookSearchBaseUrl: options.facebookSearchBaseUrl,
