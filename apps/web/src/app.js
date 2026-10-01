@@ -1122,6 +1122,23 @@ function bindEvents() {
   $("#profileGenerationInput").addEventListener("change", (event) => chooseProfileGeneration(event.target.value));
   $("#refreshButton").addEventListener("click", refreshAll);
   $("#refreshRunsButton").addEventListener("click", loadRuns);
+  $('#searchInspectionButton').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    const output = $('#searchInspectionResult');
+    button.disabled = true;
+    output.hidden = false;
+    output.textContent = 'Inspecting one HTTP search; no detail requests or listing writes…';
+    try {
+      let report = await api('/facebook/search-inspection', {method:'POST',body:'{}'});
+      const deadline = Date.now()+120000;
+      while (report.state === 'running' && Date.now() < deadline) {
+        await new Promise(resolve=>setTimeout(resolve,3000));
+        report = await api('/facebook/search-inspection');
+      }
+      output.textContent = JSON.stringify(report,null,2);
+    } catch (error) { output.textContent = error.message; }
+    finally { button.disabled = false; }
+  });
   $("#browserTestButton").addEventListener("click", async (event) => {
     const button = event.currentTarget;
     const output = $("#browserTestResult");

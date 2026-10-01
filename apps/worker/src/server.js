@@ -1,5 +1,6 @@
 import { configureFacebookCooldown, scheduleFacebookRequest } from "./facebookRequestLimiter.js";
 import { createBrowserDiagnostic } from "./facebookBrowserDiagnostic.js";
+import { inspectSearchPayload } from "./facebookSearchInspection.js";
 import { readFile } from "node:fs/promises";
 import { createDueSearchRunner } from "./scheduler.js";
 import { createServer } from "node:http";
@@ -219,6 +220,8 @@ export async function createApp() {
   const connector = buildConnector(config);
   const facebookGraphqlClient = buildFacebookGraphqlClient(config);
   const browserDiagnostic = createBrowserDiagnostic({config});
+  let searchInspection = {state:'idle'};
+  let lastInspectionStarted = 0;
 
   const runDueSearches = createDueSearchRunner({
     db, listDueSearchGroups, listSearchGroups, getProfile, advanceSearchGroup,
@@ -343,6 +346,40 @@ export async function createApp() {
         const body = parseJsonBody(await readBody(req));
         const mode = body.mode === 'logged_out' ? 'logged_out' : 'configured';
         return sendJson(res, 202, await browserDiagnostic.start({mode, expectedSessionHash:body.expectedSessionHash}));
+      }
+      if (pathname === '/facebook/search-inspection' && req.method === 'GET') {
+        return sendJson(res, 200, searchInspection);
+      }
+      if (pathname === '/facebook/search-inspection' && req.method === 'POST') {
+        if (searchInspection.state === 'running') return sendJson(res, 202, searchInspection);
+        if (Date.now() - lastInspectionStarted < 300000) return sendJson(res, 429, {error:'Wait five minutes between inspections.'});
+        const profiles = await listProfiles(db);
+        const profile = profiles.find(p=>/corvette/i.test(p.query)) ?? profiles.find(p=>p.enabled);
+        if (!profile) return sendJson(res, 400, {error:'Save a search first.'});
+        const filters = profile.filtersJson ?? {};
+        const input = parseFacebookSearchInput({query:profile.query,latitude:filters.latitude ?? filters.lat,
+          longitude:filters.longitude ?? filters.lng ?? filters.lon,radiusKm:filters.radiusKm ?? Math.round(profile.radiusMiles*1.60934),
+          minPrice:profile.minPrice,maxPrice:profile.maxPrice,limit:25});
+        lastInspectionStarted = Date.now();
+        searchInspection = {state:'running',query:profile.query,startedAt:new Date().toISOString(),detailRequests:0};
+        const job = searchInspection;
+        const inspectionClient = buildFacebookGraphqlClient(config);
+        const graphql = inspectionClient.graphqlRequest.bind(inspectionClient);
+        inspectionClient.graphqlRequest = async (...args) => {
+          const payload = await graphql(...args);
+          job.initialGraphqlFields = inspectSearchPayload(payload);
+          return payload;
+        };
+        void inspectionClient.searchListings(input).then(result=>{
+          job.listingCount = result.listings.length;
+          job.hasNextPage = result.hasNextPage;
+          job.cardSource = result.diagnostics?.cardSource ?? 'graphql';
+          job.listingFields = inspectSearchPayload({listings:result.listings.map(l=>l.raw)});
+          job.basicListings = result.listings.map(({raw,...listing})=>listing);
+          job.state = 'finished';
+          job.finishedAt = new Date().toISOString();
+        }).catch(()=>{job.state='failed'; job.error='Initial search failed. No detail requests or listing writes were made.';});
+        return sendJson(res, 202, job);
       }
       if (pathname === "/facebook/search" && req.method === "POST") {
         const body = parseJsonBody(await readBody(req));
