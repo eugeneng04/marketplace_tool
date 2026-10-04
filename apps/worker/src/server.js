@@ -1,3 +1,4 @@
+import {createCollectorStore, createRemoteCollector} from './remoteCollector.js';
 import { configureFacebookCooldown, scheduleFacebookRequest } from "./facebookRequestLimiter.js";
 import { createBrowserDiagnostic } from "./facebookBrowserDiagnostic.js";
 import { inspectSearchPayload } from "./facebookSearchInspection.js";
@@ -62,9 +63,12 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
-async function readBody(req) {
+async function readBody(req, maxBytes = Infinity) {
   const chunks = [];
+  let bytes = 0;
   for await (const chunk of req) {
+    bytes += chunk.length;
+    if (bytes > maxBytes) throw new Error("Request body too large.");
     chunks.push(chunk);
   }
 
@@ -153,9 +157,10 @@ async function resolveProfileCoordinatesIfNeeded(profileInput, body, facebookGra
   };
 }
 
-function buildConnector(config) {
+function buildConnector(config, client) {
   return createFacebookConnector({
     mode: config.connectorMode,
+    client,
     facebookCookie: config.facebookCookie,
     facebookMaxRequestsPerMinute: config.facebookMaxRequestsPerMinute,
     facebookUserAgent: config.facebookUserAgent,
@@ -217,8 +222,10 @@ export async function createApp() {
   await recoverInterruptedSearchRuns(db);
   await configureFacebookCooldown(db);
 
-  const connector = buildConnector(config);
-  const facebookGraphqlClient = buildFacebookGraphqlClient(config);
+  const remoteCollector = createRemoteCollector({store:createCollectorStore(db)});
+  const localFacebookClient = buildFacebookGraphqlClient(config);
+  const facebookGraphqlClient = remoteCollector.routeClient(localFacebookClient);
+  const connector = buildConnector(config, facebookGraphqlClient);
   const browserDiagnostic = createBrowserDiagnostic({config});
   let searchInspection = {state:'idle'};
   let lastInspectionStarted = 0;
@@ -274,11 +281,33 @@ export async function createApp() {
       }
     }
 
+    // Device tokens are limited to collecting jobs; they cannot access the
+    // normal application API or alter searches/listings themselves.
+    if (pathname === '/collector/poll' || pathname === '/collector/heartbeat' || /^\/collector\/jobs\/[^/]+$/.test(pathname)) {
+      const token = (req.headers.authorization ?? '').replace(/^Bearer /, '');
+      if (!await remoteCollector.authenticate(token)) return sendJson(res,401,{error:'Unauthorized collector.'});
+      try {
+        if (pathname === '/collector/poll' && req.method === 'POST') return sendJson(res,200,{job:await remoteCollector.poll()});
+        if (pathname === '/collector/heartbeat' && req.method === 'POST') {await remoteCollector.heartbeat(parseJsonBody(await readBody(req,1000)).retryAt);return sendJson(res,200,{ok:true});}
+        if (pathname.startsWith('/collector/jobs/') && req.method === 'POST') {
+          const raw=await readBody(req,2000000);
+          if(Buffer.byteLength(raw)>2000000) return sendJson(res,413,{error:'Collector result too large.'});
+          const accepted=await remoteCollector.finish(pathname.slice('/collector/jobs/'.length),parseJsonBody(raw));
+          return sendJson(res,accepted?200:409,{accepted});
+        }
+        return sendJson(res,405,{error:'Method not allowed.'});
+      } catch {return sendJson(res,500,{error:'Collector request failed.'});}
+    }
+
     if (!requireAuth(req, config)) {
       return sendJson(res, 401, { error: "Unauthorized" });
     }
 
     try {
+      if (pathname === '/collector/status' && req.method === 'GET') return sendJson(res,200,await remoteCollector.status());
+      if (pathname === '/collector/enroll' && req.method === 'POST') return sendJson(res,201,{token:await remoteCollector.enroll()});
+      if (pathname === '/collector/mode' && req.method === 'POST') return sendJson(res,200,await remoteCollector.enable(parseJsonBody(await readBody(req)).enabled === true));
+      if (pathname === '/collector/revoke' && req.method === 'POST') {await remoteCollector.revoke();return sendJson(res,200,{ok:true});}
       if (pathname === "/vehicle-generations" && req.method === "GET") {
         return sendJson(res, 200, { generations: await listVehicleGenerations(db) });
       }
@@ -303,7 +332,7 @@ export async function createApp() {
         return sendJson(res, 200, { deleted: true });
       }
       if (pathname === "/facebook/status" && req.method === "GET") {
-        return sendJson(res, 200, await scheduleFacebookRequest.status());
+        return sendJson(res, 200, (await remoteCollector.status()).enabled ? await remoteCollector.facebookStatus() : await scheduleFacebookRequest.status());
       }
 
       if (pathname === "/search-defaults" && req.method === "GET") {
@@ -375,7 +404,7 @@ export async function createApp() {
         const job = searchInspection;
         job.savedNewestWithinDays = filters.newestWithinDays ?? 1;
         job.inspectionNewestWithinDays = input.newestWithinDays;
-        const inspectionClient = body.mode === 'logged_out'
+        const inspectionClient = (await remoteCollector.status()).enabled ? facebookGraphqlClient : body.mode === 'logged_out'
           ? createFacebookGraphqlClient({...config, facebookCookie:'', useChromeCookies:false})
           : connector.client ?? facebookGraphqlClient;
         job.mode = body.mode === 'logged_out' ? 'logged_out' : 'configured';

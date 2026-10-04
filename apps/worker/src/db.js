@@ -34,6 +34,16 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value_json JSONB NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
 );
+CREATE TABLE IF NOT EXISTS collector_jobs (
+  id TEXT PRIMARY KEY,
+  operation TEXT NOT NULL,
+  args_json JSONB NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  result_json JSONB,
+  error_json JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL
+);
 CREATE TABLE IF NOT EXISTS vehicle_generations (
   id TEXT PRIMARY KEY,
   make TEXT NOT NULL,

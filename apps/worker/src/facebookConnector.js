@@ -205,9 +205,10 @@ export function createFacebookGraphqlConnector({
   facebookUserAgent,
   facebookSearchBaseUrl,
   maxCardsPerRun,
-  chromeProfile
+  chromeProfile,
+  client: suppliedClient
 }) {
-  const client = createFacebookGraphqlClient({
+  const client = suppliedClient ?? createFacebookGraphqlClient({
     facebookCookie,
     facebookMaxRequestsPerMinute,
     facebookUserAgent,
@@ -311,7 +312,8 @@ export function createFacebookConnector(options = {}) {
       facebookUserAgent,
       facebookSearchBaseUrl,
       maxCardsPerRun,
-      chromeProfile
+      chromeProfile,
+      client: options.client
     });
   }
 

@@ -353,7 +353,18 @@ async function loadListings() {
   renderDashboard();
 }
 
+async function loadCollectorStatus() {
+  const status = await api('/collector/status');
+  $('#collectorStatus').textContent = status.enabled
+    ? `Collection runs on your computer. ${status.connected ? 'Connected.' : 'Offline — start the collector and keep the computer awake.'}`
+    : `Collection runs on Render. Computer collector: ${status.connected ? 'connected' : 'offline'}.`;
+  $('#collectorEnableButton').disabled = !status.connected || status.enabled;
+  $('#collectorDisableButton').disabled = !status.enabled;
+  return status;
+}
+
 async function loadRuns() {
+  void loadCollectorStatus().catch(error => {$('#collectorStatus').textContent = error.message;});
   const data = await api("/runs?limit=50");
   state.runs = data.runs ?? [];
   renderRuns();
@@ -1122,6 +1133,30 @@ function bindEvents() {
   $("#profileGenerationInput").addEventListener("change", (event) => chooseProfileGeneration(event.target.value));
   $("#refreshButton").addEventListener("click", refreshAll);
   $("#refreshRunsButton").addEventListener("click", loadRuns);
+  $('#collectorDownloadButton').addEventListener('click', async () => {
+    const button = $('#collectorDownloadButton');
+    button.disabled = true;
+    try {
+      const {token} = await api('/collector/enroll', {method:'POST'});
+      const blob = new Blob([JSON.stringify({appUrl:new URL(state.apiBase || window.location.origin).origin,token},null,2)], {type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a'); link.href=url; link.download='resale-collector.json'; link.click();
+      setTimeout(() => URL.revokeObjectURL(url),1000);
+      $('#collectorSetup').hidden=false;
+      await loadCollectorStatus();
+    } catch(error) {$('#collectorStatus').textContent=error.message;}
+    finally {button.disabled=false;}
+  });
+  for(const [id,path,body] of [
+    ['collectorEnableButton','/collector/mode',{enabled:true}],
+    ['collectorDisableButton','/collector/mode',{enabled:false}],
+    ['collectorRevokeButton','/collector/revoke',{}]
+  ]) $('#'+id).addEventListener('click',async () => {
+    const button=$('#'+id);button.disabled=true;
+    try {await api(path,{method:'POST',body:JSON.stringify(body)});await loadCollectorStatus();}
+    catch(error) {$('#collectorStatus').textContent=error.message;button.disabled=false;}
+  });
+
   const inspectHttpSearch = async (event) => {
     const button = event.currentTarget;
     const output = $('#searchInspectionResult');

@@ -47,7 +47,7 @@ function makeConnector() {
         descriptionRaw: undefined,
         priceRaw: card.priceRaw,
         locationRaw: card.locationRaw,
-        imageUrls: [card.thumbnailUrl],
+        imageUrls: [card.thumbnailUrl].filter(Boolean),
         sourceMetadata: card.sourceMetadata
       };
     },
@@ -74,7 +74,7 @@ test("new GraphQL listings are enriched with a real description", async () => {
   assert.equal(connector.detailRequests, 1);
 });
 
-test("detail enrichment is bounded per run so the shared limiter can pace it safely", async () => {
+test("all eligible details are fetched sequentially so the shared limiter can pace them", async () => {
   const connector = makeConnector();
   const [base] = (await connector.captureListingCards({})).cards;
   connector.captureListingCards = async () => ({
@@ -87,6 +87,14 @@ test("detail enrichment is bounded per run so the shared limiter can pace it saf
     }))
   });
 
+  const originalDetail = connector.fetchListingDetail.bind(connector);
+  let active=0, maximumActive=0;
+  connector.fetchListingDetail=async card=>{
+    active++;maximumActive=Math.max(maximumActive,active);
+    try {await new Promise(resolve=>setImmediate(resolve));return await originalDetail(card);}
+    finally {active--;}
+  };
+
   const run = await runProfileSync({
     db: {}, connector, profile: { id: "profile-1", query: "Civic", filtersJson: {} },
     dbOps: makeDbOps()
@@ -94,8 +102,9 @@ test("detail enrichment is bounded per run so the shared limiter can pace it saf
 
   assert.equal(run.status, "completed");
   assert.equal(run.resultsFound, 7);
-  assert.equal(run.detailPagesOpened, 3);
-  assert.equal(connector.detailRequests, 3);
+  assert.equal(run.detailPagesOpened, 7);
+  assert.equal(connector.detailRequests, 7);
+  assert.equal(maximumActive, 1);
 });
 
 test("placeholder search cards fetch details before being counted and saved", async () => {
@@ -158,6 +167,7 @@ test("placeholder cards reuse saved listing data instead of re-fetching every kn
     title_raw: "2020 Chevrolet Corvette",
     description_raw: "Clean title, 25,000 miles",
     price_raw: "$65,000",
+    current_price: 65000,
     location_raw: "San Jose",
     image_urls: ["https://example.test/corvette.jpg"],
     seller_raw: "Seller",

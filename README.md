@@ -164,3 +164,31 @@ Use the blueprint in `render.yaml`.
 
 Deployment notes are in:
 - `docs/implementation/render-start.md`
+
+## Computer HTTP collector for Render
+
+If Facebook rejects requests from the Render network, the UI/API and database can
+stay on Render while a computer performs the same direct HTTP/GraphQL requests.
+In Runs, select **Connect computer collector** to download a private device
+connection file. From this repository run:
+
+```bash
+node apps/worker/src/collectorAgent.js --config ~/Downloads/resale-collector.json
+```
+
+Refresh Runs, then select **Use computer collector**. Manual searches, scheduled
+search groups, location lookup and listing refreshes use that collector through
+the existing parsing/storage/scoring pipeline. The worker uses cookie-free page
+tokens; it never reads Chrome cookies. Keep one worker running and the computer
+awake. An offline worker produces an actionable failure. The server never
+silently switches to Render or replays interrupted Facebook requests.
+
+The connection file contains a restricted device token, not the app's admin token.
+Keep it private. The worker may claim collection jobs and submit their results;
+it cannot call the normal app API. **Disconnect computer collector** revokes the
+token. Downloading a new connection file rotates the token and initially keeps
+Render selected until the new collector is connected and enabled. Facebook
+pacing and cooldown are retained locally across worker restarts in
+`.collector-cooldown.json` next to the connection file. Polling keeps the app and
+database active while the worker is running; collection stops when the computer
+sleeps or the process exits. This is not an independently hosted collector.

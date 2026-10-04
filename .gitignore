@@ -7,3 +7,6 @@ coverage
 .next
 .env
 .DS_Store
+
+resale-collector*.json
+.collector-cooldown.json*

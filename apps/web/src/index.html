@@ -261,6 +261,14 @@
                 <button id="refreshRunsButton" class="text-button" type="button">Refresh</button>
               </div>
             </div>
+            <div style="padding:0 16px 16px">
+              <p id="collectorStatus" aria-live="polite">Checking HTTP collector…</p>
+              <button id="collectorDownloadButton" class="text-button" type="button">Connect computer collector</button>
+              <button id="collectorEnableButton" class="text-button" type="button">Use computer collector</button>
+              <button id="collectorDisableButton" class="text-button" type="button">Use Render collector</button>
+              <button id="collectorRevokeButton" class="text-button" type="button">Disconnect computer collector</button>
+              <p id="collectorSetup" hidden>Connection file downloaded. In your project folder, run: <code>node apps/worker/src/collectorAgent.js --config ~/Downloads/resale-collector.json</code>. Keep your computer awake, then select “Use computer collector”. The file contains a private device credential; keep it private.</p>
+            </div>
             <details style="padding:0 16px 16px">
               <summary>Browser diagnostic options</summary>
               <select id="browserTestMode"><option value="configured">Configured Facebook session</option><option value="logged_out">No Facebook cookies</option></select>
