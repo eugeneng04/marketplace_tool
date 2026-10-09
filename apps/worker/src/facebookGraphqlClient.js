@@ -12,6 +12,7 @@ const MARKETPLACE_SEARCH_DOC_ID = "7111939778879383";
 const LOCATION_SEARCH_DOC_ID = "5585904654783609";
 const LISTING_DETAIL_DOC_ID = "26924013917190310";
 const LISTING_PHOTOS_DOC_ID = "10059604367394414";
+const LISTING_FIELD_EXCEPTION_MESSAGE = "A server error field_exception occured. Check server logs for details.";
 const GRAPHQL_OPERATION_NAMES = new Map([
   [MARKETPLACE_SEARCH_DOC_ID, "Marketplace search"],
   [LOCATION_SEARCH_DOC_ID, "Marketplace location search"],
@@ -674,6 +675,45 @@ export function formatFacebookError(data, session = {}) {
   return `Facebook rejected the Marketplace request${details ? ` (${details})` : ""}.`;
 }
 
+export class ListingDetailUnavailableError extends Error {
+  constructor(message, sourceItemId, diagnostic) {
+    super(message);
+    this.name = "ListingDetailUnavailableError";
+    this.code = "FACEBOOK_LISTING_DETAIL_UNAVAILABLE";
+    this.sourceItemId = sourceItemId;
+    this.facebookDetailDiagnostic = diagnostic;
+  }
+}
+
+function inspectListingDetailFailure(data, session) {
+  const safe = sanitizeFacebookEvidence(data.errors, session);
+  const errorFields = ["message", "code", "type", "path", "severity", "extensions", "debug_info"];
+  const pathFields = new Set([
+    "data", "viewer", "marketplace_product_details_page", "target", "id",
+    "marketplace_listing_title", "redacted_description", "text", "listing_price",
+    "formatted_amount", "amount", "listing_photos", "primary_listing_photo", "image", "uri"
+  ]);
+  return {
+    operation: "listing_detail",
+    targetPresent: data.data?.viewer?.marketplace_product_details_page?.target != null,
+    topLevelError: Object.hasOwn(data, "error"),
+    errorCount: Array.isArray(data.errors) ? data.errors.length : null,
+    errors: Array.isArray(safe) ? safe.slice(0, 3).map((error, index) => ({
+      knownFields: errorFields.filter(field => Object.hasOwn(data.errors[index] ?? {}, field)),
+      unknownFieldCount: Object.keys(data.errors[index] ?? {}).filter(field => !errorFields.includes(field)).length,
+      knownMessage: data.errors[index]?.message === LISTING_FIELD_EXCEPTION_MESSAGE,
+      extensionsPresent: error?.extensions != null,
+      codePresent: error?.code != null || error?.extensions?.code != null,
+      code: /^[0-9]{1,20}$/.test(String(error?.code ?? error?.extensions?.code))
+        ? error.code ?? error.extensions.code : null,
+      typePresent: error?.type != null || error?.extensions?.type != null,
+      typeShape: (error?.type ?? error?.extensions?.type) == null ? null : typeof (error.type ?? error.extensions.type),
+      path: Array.isArray(error?.path) ? error.path.slice(0, 16).map(part =>
+        Number.isSafeInteger(part) && part >= 0 ? part : pathFields.has(part) ? part : "[other]") : null
+    })) : []
+  };
+}
+
 export class FacebookGraphqlClient {
   constructor(options = {}) {
     this.cookieHeader = options.facebookCookie ?? "";
@@ -879,9 +919,22 @@ export class FacebookGraphqlClient {
         this.lastSearchInspection.response = sanitizeFacebookEvidence(data, session);
         this.lastSearchInspection.transport.bodyLength = text.length;
       }
-      if (data.errors?.length || data.error) {
+      if (data.errors?.length || data.error || (data.errors != null && !Array.isArray(data.errors))) {
+        const message = `${formatFacebookError(data, session)} Rejected operation: ${operation}.`;
+        const diagnostic = docId === LISTING_DETAIL_DOC_ID ? inspectListingDetailFailure(data, session) : null;
+        const rejection = Array.isArray(data.errors) && data.errors.length === 1 ? data.errors[0] : null;
+        if (docId === LISTING_DETAIL_DOC_ID && !Object.hasOwn(data, "error") &&
+            rejection && typeof rejection === "object" && !Array.isArray(rejection) &&
+            rejection.message === LISTING_FIELD_EXCEPTION_MESSAGE &&
+            rejection.code == null && rejection.type == null &&
+            Object.keys(rejection).every(key => ["message", "code", "type", "path"].includes(key))) {
+          const sourceItemId = sanitizeFacebookEvidence(`${variables.targetId}`, session).slice(0, 80);
+          throw new ListingDetailUnavailableError(message, sourceItemId, diagnostic);
+        }
         this.session = null;
-        throw new Error(`${formatFacebookError(data, session)} Rejected operation: ${operation}.`);
+        const error = new Error(message);
+        if (diagnostic) error.facebookDetailDiagnostic = diagnostic;
+        throw error;
       }
       return data;
     } catch (error) {

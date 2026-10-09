@@ -801,7 +801,10 @@ export async function createApp() {
         res.setHeader("Retry-After", Math.max(1, Math.ceil((error.retryAt - Date.now()) / 1000)));
         return sendJson(res, 429, { error: message, retryAt: new Date(error.retryAt).toISOString() });
       }
-      return sendJson(res, 500, { error: message });
+      return sendJson(res, 500, {
+        error: message,
+        ...(error.facebookDetailDiagnostic ? { detailDiagnostic: error.facebookDetailDiagnostic } : {})
+      });
     }
   });
 
