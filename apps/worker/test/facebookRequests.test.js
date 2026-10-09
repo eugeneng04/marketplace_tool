@@ -164,27 +164,30 @@ test('startup restores a recent rate limit into persistent storage', async () =>
   assert.equal(calls[2].params[0],Date.parse('2026-09-27T00:03:00Z'));
 });
 
-test('detail rejection does not trigger a photo request; existing gallery avoids extra request', async () => {
-  const client=new FacebookGraphqlClient({useChromeCookies:false});
+test('detail rejection does not trigger a photo request; existing gallery avoids extra request', async t => {
+  const client=new FacebookGraphqlClient({useChromeCookies:false,scheduleRequest:fakeLimiter().schedule});
+  client.session={cookieHeader:'',fbDtsg:'test-token',lsd:'',clientRevision:'1'};
   let calls=0;
-  client.graphqlRequest=async()=>{calls++;throw new Error('limited');};
+  t.mock.method(globalThis,'fetch',async()=>{calls++;throw new Error('limited');});
   await assert.rejects(client.getListingDetail('123'),/limited/);
   assert.equal(calls,1);
   calls=0;
-  client.graphqlRequest=async()=>{calls++;return {data:{viewer:{marketplace_product_details_page:{target:{id:'123',listing_photos:[{image:{uri:'https://example.com/a.jpg'}},{image:{uri:'https://example.com/b.jpg'}}]}}}}};};
+  t.mock.method(globalThis,'fetch',async()=>{calls++;return Response.json({data:{viewer:{marketplace_product_details_page:{target:{id:'123',listing_photos:[{image:{uri:'https://example.com/a.jpg'}},{image:{uri:'https://example.com/b.jpg'}}]}}}}});});
   const detail=await client.getListingDetail('123');
   assert.equal(calls,1);
-  assert.equal(detail.images.length,2);
+  assert.deepEqual(detail.images,['https://example.com/a.jpg','https://example.com/b.jpg']);
 });
 
-test('detail requests fetch the scoped photo gallery when the listing has no photos', async () => {
-  const client=new FacebookGraphqlClient({useChromeCookies:false});
+test('detail requests fetch the scoped photo gallery when the listing has no photos', async t => {
+  const client=new FacebookGraphqlClient({useChromeCookies:false,scheduleRequest:fakeLimiter().schedule});
+  client.session={cookieHeader:'',fbDtsg:'test-token',lsd:'',clientRevision:'1'};
   const calls=[];
-  client.graphqlRequest=async(docId)=>{
+  t.mock.method(globalThis,'fetch',async(_url,options)=>{
+    const docId=new URLSearchParams(options.body).get('doc_id');
     calls.push(docId);
-    if (calls.length === 1) return {data:{viewer:{marketplace_product_details_page:{target:{id:'123',marketplace_listing_title:'2020 Chevrolet Corvette'}}}}};
-    return {data:{viewer:{marketplace_product_details_page:{target:{listing_photos:[{image:{uri:'https://example.com/corvette.jpg'}}]}}}}};
-  };
+    if (calls.length === 1) return Response.json({data:{viewer:{marketplace_product_details_page:{target:{id:'123',marketplace_listing_title:'2020 Chevrolet Corvette'}}}}});
+    return Response.json({data:{viewer:{marketplace_product_details_page:{target:{listing_photos:[{image:{uri:'https://example.com/corvette.jpg'}}]}}}}});
+  });
 
   const detail=await client.getListingDetail('123');
 
@@ -194,13 +197,15 @@ test('detail requests fetch the scoped photo gallery when the listing has no pho
   assert.equal(detail.imageUrl,'https://example.com/corvette.jpg');
 });
 
-test('run detail mode avoids a second request for a missing photo gallery', async () => {
-  const client=new FacebookGraphqlClient({useChromeCookies:false});
+test('run detail mode avoids a second request for a missing photo gallery', async t => {
+  const client=new FacebookGraphqlClient({useChromeCookies:false,scheduleRequest:fakeLimiter().schedule});
+  client.session={cookieHeader:'',fbDtsg:'test-token',lsd:'',clientRevision:'1'};
   let calls=0;
-  client.graphqlRequest=async()=>{calls++; return {data:{viewer:{marketplace_product_details_page:{target:{id:'123',marketplace_listing_title:'2020 Chevrolet Corvette'}}}}};};
+  t.mock.method(globalThis,'fetch',async()=>{calls++; return Response.json({data:{viewer:{marketplace_product_details_page:{target:{id:'123',marketplace_listing_title:'2020 Chevrolet Corvette'}}}}});});
 
   const detail=await client.getListingDetail('123',{fetchPhotos:false});
 
   assert.equal(calls,1);
+  assert.equal(detail.title,'2020 Chevrolet Corvette');
   assert.equal(detail.images.length,0);
 });

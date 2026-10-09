@@ -81,7 +81,7 @@ export function parseVehicleListing(rawItem) {
   const attributes = {};
   const metadata = rawItem.sourceMetadata ?? {};
   const marketplaceMetadata = {};
-  for (const key of ["sellerId", "customTitle", "subtitles", "previousPrice", "categoryId", "deliveryTypes", "videoIds", "isPending", "isSold", "isLive", "isHidden", "isViewerSeller", "currency"]) {
+  for (const key of ["sellerId", "customTitle", "subtitles", "previousPrice", "categoryId", "deliveryTypes", "videoIds", "isPending", "isSold", "isLive", "isHidden", "isViewerSeller", "currency", "optionalOmission"]) {
     if (metadata[key] !== undefined) marketplaceMetadata[key] = metadata[key];
   }
   if (Object.keys(marketplaceMetadata).length) attributes.marketplaceMetadata = marketplaceMetadata;

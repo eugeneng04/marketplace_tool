@@ -61,6 +61,27 @@ Local development retains the internal scheduler by default.
   Unknown signatures, authentication failures, throttling, and transport errors
   stop later detail requests. A fatal error retains earlier rejected listing
   IDs in the bounded run error.
+- `getListingDetail` separately accepts the reviewed optional `delivery_data`
+  field failure when the response has exactly one error with only `message`,
+  `path`, `severity`, `mids`, and `debug_link`. The message must match the field
+  exception above, the severity must be `ERROR`, and the path must be
+  `viewer/marketplace_product_details_page/target/delivery_data`. The one `mids`
+  value must be a nonblank string of at most 512 characters. `debug_link` must
+  be null or a nonblank string of at most 2048 characters. Both string checks
+  reject control characters. A top-level `error` property rejects recovery,
+  including null. The failed field must be absent or null.
+  Recovery requires the requested listing ID, nonblank title, description text,
+  usable price and currency, location, seller ID and name, creation time, and
+  boolean pending and sold flags. Empty description text is valid. Present
+  photo, attribute, subtitle, location, and vehicle containers must have the
+  consumed shapes. Clean responses retain their existing parser behavior.
+  The decoder removes `delivery_data` from a copied target before recursive
+  vehicle extraction. A validated recovery completes the domain refresh and
+  persists `optionalOmission` with `field: "delivery_data"` and
+  `signatureVersion: 1` in `parsed_attributes_json.marketplaceMetadata`.
+  It does not retry solely for the unused field. Requested photo enrichment
+  remains strict. Search, location, photo, and generic GraphQL requests cannot
+  use this recovery.
 - A run with rejected details remains `failed` and creates no alerts. Matching
   cards and successful details still persist. An incomplete refresh marker makes
   the affected item eligible for detail on a later run, even when saving its
@@ -86,7 +107,8 @@ Local development retains the internal scheduler by default.
   live upstream error has the recognized shape or that a saved Render run works.
   The diagnostic also reports enumerated severity, retry and reauthentication
   flags, array shape and count for `locations` and `mids`, and non-null presence
-  for fixed listing fields. Arbitrary metadata values and listing values remain
+  for fixed listing fields. It reports the shape of `delivery_data`, the shape
+  of `debug_link`, and at most three `mids` element types. Arbitrary metadata values and listing values remain
   excluded. Field presence does not prove that partial detail data is usable.
   Capture this safe diagnostic, then verify the saved run separately after an
   authorized deployment.

@@ -43,7 +43,7 @@ test("detail recovery retains complete domain data and bounded persisted omissio
   assert.equal(detail.price, "$12,000");
   assert.equal(detail.location, "Oakland, California");
   assert.equal(detail.mileage, 70000);
-  assert.equal(detail.postedDate, "2025-09-04T06:13:20.000Z");
+  assert.equal(detail.postedDate, "2025-09-04T15:33:20.000Z");
   assert.deepEqual(detail.responseEvidence, { optionalOmission: { field: "delivery_data", signatureVersion: 1 } });
   assert.equal(Object.hasOwn(detail.raw, "delivery_data"), false);
   assert.equal(payload.data.viewer.marketplace_product_details_page.target.delivery_data, null);
@@ -98,6 +98,7 @@ for (const [name, mutate] of [
   ["missing time", p => { delete p.data.viewer.marketplace_product_details_page.target.creation_time; }],
   ["invalid time", p => { p.data.viewer.marketplace_product_details_page.target.creation_time = "now"; }],
   ["malformed status", p => { p.data.viewer.marketplace_product_details_page.target.is_sold = "false"; }],
+  ["missing status", p => { delete p.data.viewer.marketplace_product_details_page.target.is_pending; }],
   ["malformed photos", p => { p.data.viewer.marketplace_product_details_page.target.listing_photos = {}; }],
   ["malformed photo URI", p => { p.data.viewer.marketplace_product_details_page.target.listing_photos = [{ image: { uri: {} } }]; }],
   ["malformed attributes", p => { p.data.viewer.marketplace_product_details_page.target.attribute_data = {}; }],
@@ -129,6 +130,17 @@ test("detail recovery preserves GraphQL throttling rejection", async t => {
   const payload = responsePayload();
   payload.errors[0].code = 1675004;
   await assert.rejects(setup(t, payload).getListingDetail("102"), { code: "FACEBOOK_COOLDOWN" });
+});
+
+test("recovered detail still fails when requested photo enrichment is rejected", async t => {
+  const payload = responsePayload();
+  delete payload.data.viewer.marketplace_product_details_page.target.primary_listing_photo;
+  const client = setup(t, payload);
+  t.mock.method(globalThis, "fetch", async (_url, options) => {
+    const docId = new URLSearchParams(options.body).get("doc_id");
+    return Response.json(docId === "26924013917190310" ? payload : { errors: [{ message: "Photos denied" }] });
+  });
+  await assert.rejects(client.getListingDetail("102"), /Photos denied/);
 });
 
 for (const [name, run] of [

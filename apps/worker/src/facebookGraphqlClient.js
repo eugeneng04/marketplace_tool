@@ -1,5 +1,6 @@
 import { scheduleFacebookRequest } from "./facebookRequestLimiter.js";
 import { inspectSearchPayload, sanitizeFacebookEvidence } from "./facebookSearchInspection.js";
+import { parsePrice } from "./utils.js";
 import crypto from "node:crypto";
 import { execFileSync, execSync } from "node:child_process";
 import os from "node:os";
@@ -535,6 +536,76 @@ export function parseListingDetailResponse(data, listingId) {
   };
 }
 
+function recoverListingDetailResponse(data, listingId) {
+  const isRecord = value => value !== null && typeof value === "object" && !Array.isArray(value);
+  const nonblank = value => typeof value === "string" && value.trim().length > 0;
+  const bounded = (value, limit) => nonblank(value) && value.length <= limit && !/[\x00-\x1f\x7f]/.test(value);
+  if (!isRecord(data) || Object.hasOwn(data, "error") || !Array.isArray(data.errors) || data.errors.length !== 1) return null;
+  const error = data.errors[0];
+  const keys = ["message", "path", "severity", "mids", "debug_link"];
+  const expectedPath = ["viewer", "marketplace_product_details_page", "target", "delivery_data"];
+  if (!isRecord(error) || Object.keys(error).length !== keys.length || !keys.every(key => Object.hasOwn(error, key)) ||
+      error.message !== LISTING_FIELD_EXCEPTION_MESSAGE || error.severity !== "ERROR" ||
+      !Array.isArray(error.path) || error.path.length !== expectedPath.length || !expectedPath.every((part, i) => error.path[i] === part) ||
+      !Array.isArray(error.mids) || error.mids.length !== 1 || !bounded(error.mids[0], 512) ||
+      !(error.debug_link === null || bounded(error.debug_link, 2048))) return null;
+  const target = data.data?.viewer?.marketplace_product_details_page?.target;
+  if (!isRecord(target) || (Object.hasOwn(target, "delivery_data") && target.delivery_data !== null)) return null;
+  const projected = { ...target };
+  delete projected.delivery_data;
+
+  const price = projected.listing_price;
+  const location = projected.location_text?.text ?? projected.location?.reverse_geocode?.city_page?.display_name;
+  const seller = projected.marketplace_listing_seller;
+  const createdAt = Number(projected.creation_time);
+  if (!nonblank(projected.id) || projected.id !== `${listingId}` || !nonblank(projected.marketplace_listing_title) ||
+      !isRecord(projected.redacted_description) || typeof projected.redacted_description.text !== "string" ||
+      !isRecord(price) || !nonblank(price.formatted_amount ?? price.amount) || parsePrice(price.formatted_amount ?? price.amount) === null ||
+      !nonblank(price.currency) || !nonblank(location) || !isRecord(seller) || !nonblank(seller.id) || !nonblank(seller.name) ||
+      !(typeof projected.creation_time === "number" || nonblank(projected.creation_time)) ||
+      !Number.isFinite(createdAt) || createdAt <= 0 || !Number.isFinite(new Date(createdAt * 1000).getTime()) ||
+      typeof projected.is_pending !== "boolean" || typeof projected.is_sold !== "boolean") return null;
+
+  const textValue = value => value == null || typeof value === "string" || (typeof value === "number" && Number.isFinite(value)) ||
+    (isRecord(value) && ["formatted_value", "display_value", "value", "label", "text", "attribute_value"]
+      .every(key => textValue(value[key])));
+  const optionalText = (object, keys) => keys.every(key => object[key] == null || typeof object[key] === "string");
+  const photo = value => isRecord(value) && (value.image == null ||
+    (isRecord(value.image) && (value.image.uri == null || nonblank(value.image.uri))));
+  if (!optionalText(projected, ["condition", "share_uri"]) ||
+      (projected.location_text != null && (!isRecord(projected.location_text) || !optionalText(projected.location_text, ["text"]))) ||
+      (projected.location != null && (!isRecord(projected.location) ||
+        (projected.location.reverse_geocode != null && (!isRecord(projected.location.reverse_geocode) ||
+          (projected.location.reverse_geocode.city_page != null && (!isRecord(projected.location.reverse_geocode.city_page) ||
+            !optionalText(projected.location.reverse_geocode.city_page, ["display_name"]))))))) ||
+      (projected.primary_listing_photo != null && !photo(projected.primary_listing_photo)) ||
+      (projected.listing_photos != null && (!Array.isArray(projected.listing_photos) || !projected.listing_photos.every(photo))) ||
+      (projected.attribute_data != null && (!Array.isArray(projected.attribute_data) || !projected.attribute_data.every(entry =>
+        isRecord(entry) && optionalText(entry, ["attribute_name", "name", "key"]) &&
+        ["attribute_value", "value", "label", "formatted_value"].every(key => textValue(entry[key])) &&
+        (!/condition/i.test(entry.attribute_name ?? "") || entry.label == null || typeof entry.label === "string")))) ||
+      (projected.custom_sub_titles_with_rendering_flags != null && (!Array.isArray(projected.custom_sub_titles_with_rendering_flags) ||
+        !projected.custom_sub_titles_with_rendering_flags.every(entry => isRecord(entry) && optionalText(entry, ["subtitle"])))) ||
+      (projected.vehicle_odometer_data != null && (!isRecord(projected.vehicle_odometer_data) ||
+        !optionalText(projected.vehicle_odometer_data, ["unit"]) || !textValue(projected.vehicle_odometer_data.value)))) return null;
+
+  const vehicleFields = ["vehicle_make_display_name", "vehicle_model_display_name", "vehicle_trim_display_name",
+    "vehicle_transmission_type", "vehicle_exterior_color", "vehicle_interior_color", "vehicle_fuel_type",
+    "vehicle_number_of_owners", "vehicle_seller_type"];
+  if (!vehicleFields.every(key => textValue(projected[key])) ||
+      !(projected.vehicle_is_paid_off == null || typeof projected.vehicle_is_paid_off === "boolean" || textValue(projected.vehicle_is_paid_off))) return null;
+  const consumedValuesValid = node => {
+    if (node === null || typeof node !== "object") return true;
+    if (Array.isArray(node)) return node.every(consumedValuesValid);
+    return Object.entries(node).every(([key, value]) =>
+      (!(/mileage|odometer|vehicle_miles/i.test(key) || /^(vehicle_)?(transmission|condition|make|model|year)$/i.test(key)) || textValue(value)) && consumedValuesValid(value));
+  };
+  if (!consumedValuesValid(projected)) return null;
+  const detail = parseListingDetailResponse({ data: { viewer: { marketplace_product_details_page: { target: projected } } } }, listingId);
+  detail.responseEvidence = { optionalOmission: { field: "delivery_data", signatureVersion: 1 } };
+  return detail;
+}
+
 function attributeText(value) {
   if (typeof value === "string" || typeof value === "number") return `${value}`.trim();
   if (!value || typeof value !== "object") return "";
@@ -705,6 +776,8 @@ function inspectListingDetailFailure(data, session) {
   return {
     operation: "listing_detail",
     targetPresent: target != null,
+    deliveryDataShape: target == null || !Object.hasOwn(target, "delivery_data") ? "missing"
+      : target.delivery_data === null ? "null" : Array.isArray(target.delivery_data) ? "array" : typeof target.delivery_data,
     targetFields: Object.fromEntries(targetFields.map(field => [field, target?.[field] != null])),
     topLevelError: Object.hasOwn(data, "error"),
     errorCount: Array.isArray(data.errors) ? data.errors.length : null,
@@ -714,6 +787,10 @@ function inspectListingDetailFailure(data, session) {
       unknownFields: sanitizeFacebookEvidence(Object.keys(error ?? {}).filter(field => !errorFields.includes(field)), session)
         .filter(isSchemaField).slice(0, 10),
       knownMessage: data.errors[index]?.message === LISTING_FIELD_EXCEPTION_MESSAGE,
+      debugLinkShape: !Object.hasOwn(data.errors[index] ?? {}, "debug_link") ? "missing"
+        : data.errors[index].debug_link === null ? "null" : Array.isArray(data.errors[index].debug_link) ? "array" : typeof data.errors[index].debug_link,
+      midElementShapes: Array.isArray(data.errors[index]?.mids) ? data.errors[index].mids.slice(0, 3).map(value =>
+        value === null ? "null" : Array.isArray(value) ? "array" : typeof value) : null,
       severity: data.errors[index]?.severity == null ? null
         : ["WARNING", "ERROR", "CRITICAL", "FATAL"].includes(data.errors[index].severity) ? data.errors[index].severity : "[other]",
       arrays: Object.fromEntries(["locations", "mids"].filter(field => Object.hasOwn(data.errors[index] ?? {}, field)).map(field => {
@@ -855,6 +932,32 @@ export class FacebookGraphqlClient {
   }
 
   async graphqlRequest(docId, variables) {
+    return this.#requestGraphqlOperation(docId, variables, (data, session) => this.#decodeGraphqlResponse(data, docId, variables, session));
+  }
+
+  #decodeGraphqlResponse(data, docId, variables, session) {
+    const operation = GRAPHQL_OPERATION_NAMES.get(docId) ?? "Marketplace GraphQL";
+    if (data.errors?.length || data.error || (data.errors != null && !Array.isArray(data.errors))) {
+      const message = `${formatFacebookError(data, session)} Rejected operation: ${operation}.`;
+      const diagnostic = docId === LISTING_DETAIL_DOC_ID ? inspectListingDetailFailure(data, session) : null;
+      const rejection = Array.isArray(data.errors) && data.errors.length === 1 ? data.errors[0] : null;
+      if (docId === LISTING_DETAIL_DOC_ID && !Object.hasOwn(data, "error") &&
+          rejection && typeof rejection === "object" && !Array.isArray(rejection) &&
+          rejection.message === LISTING_FIELD_EXCEPTION_MESSAGE &&
+          rejection.code == null && rejection.type == null &&
+          Object.keys(rejection).every(key => ["message", "code", "type", "path"].includes(key))) {
+        const sourceItemId = sanitizeFacebookEvidence(`${variables.targetId}`, session).slice(0, 80);
+        throw new ListingDetailUnavailableError(message, sourceItemId, diagnostic);
+      }
+      this.session = null;
+      const error = new Error(message);
+      if (diagnostic) error.facebookDetailDiagnostic = diagnostic;
+      throw error;
+    }
+    return data;
+  }
+
+  async #requestGraphqlOperation(docId, variables, decode) {
     const session = await this.ensureSession();
     const operation = GRAPHQL_OPERATION_NAMES.get(docId) ?? "Marketplace GraphQL";
     this.reqCounter += 1;
@@ -942,24 +1045,7 @@ export class FacebookGraphqlClient {
         this.lastSearchInspection.response = sanitizeFacebookEvidence(data, session);
         this.lastSearchInspection.transport.bodyLength = text.length;
       }
-      if (data.errors?.length || data.error || (data.errors != null && !Array.isArray(data.errors))) {
-        const message = `${formatFacebookError(data, session)} Rejected operation: ${operation}.`;
-        const diagnostic = docId === LISTING_DETAIL_DOC_ID ? inspectListingDetailFailure(data, session) : null;
-        const rejection = Array.isArray(data.errors) && data.errors.length === 1 ? data.errors[0] : null;
-        if (docId === LISTING_DETAIL_DOC_ID && !Object.hasOwn(data, "error") &&
-            rejection && typeof rejection === "object" && !Array.isArray(rejection) &&
-            rejection.message === LISTING_FIELD_EXCEPTION_MESSAGE &&
-            rejection.code == null && rejection.type == null &&
-            Object.keys(rejection).every(key => ["message", "code", "type", "path"].includes(key))) {
-          const sourceItemId = sanitizeFacebookEvidence(`${variables.targetId}`, session).slice(0, 80);
-          throw new ListingDetailUnavailableError(message, sourceItemId, diagnostic);
-        }
-        this.session = null;
-        const error = new Error(message);
-        if (diagnostic) error.facebookDetailDiagnostic = diagnostic;
-        throw error;
-      }
-      return data;
+      return decode(data, session);
     } catch (error) {
       if (error instanceof SyntaxError) throw new Error("Could not parse Facebook GraphQL response.");
       throw error;
@@ -1077,8 +1163,10 @@ export class FacebookGraphqlClient {
   }
 
   async getListingDetail(listingId, { fetchPhotos = true } = {}) {
-    const data = await this.graphqlRequest(LISTING_DETAIL_DOC_ID, buildListingDetailVariables(listingId));
-    const detail = parseListingDetailResponse(data, listingId);
+    const variables = buildListingDetailVariables(listingId);
+    const detail = await this.#requestGraphqlOperation(LISTING_DETAIL_DOC_ID, variables, (data, session) =>
+      recoverListingDetailResponse(data, listingId) ??
+      parseListingDetailResponse(this.#decodeGraphqlResponse(data, LISTING_DETAIL_DOC_ID, variables, session), listingId));
     // Search cards usually include a thumbnail. Cursor-only search results do
     // not, so fetch the listing-scoped gallery only when detail also omitted it.
     if (fetchPhotos && !detail.images.length) {

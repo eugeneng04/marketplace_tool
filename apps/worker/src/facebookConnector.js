@@ -183,6 +183,7 @@ export function detailToRawSourceItem(detail, card) {
       condition: detail.condition || undefined,
       isPending: detail.isPending ?? card?.sourceMetadata?.isPending,
       isSold: detail.isSold ?? card?.sourceMetadata?.isSold,
+      optionalOmission: detail.responseEvidence?.optionalOmission,
       postedDate: detail.postedDate || card?.sourceMetadata?.postedDate || undefined
     }
   };
