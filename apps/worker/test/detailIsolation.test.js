@@ -295,6 +295,47 @@ test("unknown detail diagnostics expose bounded structure through the API error 
   assert.equal(scenario.client.session, null);
 });
 
+test("detail diagnostics report fixed metadata and target presence without private values", async t => {
+  const response = detailPayload("102");
+  Object.assign(response.data.viewer.marketplace_product_details_page.target, {
+    location: null, location_text: { text: "private-location" },
+    vehicle_transmission_type: "private-transmission", vehicle_odometer_data: { value: "private-mileage" }
+  });
+  response.errors = [{ message: fieldException, severity: "CRITICAL", is_transient: false,
+    requires_reauth: null, allow_user_retry: true, api_error_code: "private-api-code",
+    summary: "private-summary", description: "private-description", locations: [{ line: "private-line" }],
+    path: ["viewer", "marketplace_product_details_page", "target", "vehicle_transmission_type", "private-leaf"] }];
+  const scenario = setup(t, { rejected: { "102": response } });
+  await assert.rejects(scenario.client.getListingDetail("102"), error => {
+    assert.equal(error instanceof ListingDetailUnavailableError, false);
+    const diagnostic = error.facebookDetailDiagnostic;
+    const metadata = diagnostic.errors[0];
+    assert.equal(metadata.severity, "CRITICAL");
+    assert.deepEqual(metadata.flags, { is_transient: false, allow_user_retry: true, requires_reauth: null });
+    assert.equal(metadata.unknownFieldCount, 0);
+    for (const field of ["locations", "api_error_code", "summary", "description"]) assert.ok(metadata.knownFields.includes(field));
+    assert.deepEqual(metadata.path, ["viewer", "marketplace_product_details_page", "target", "vehicle_transmission_type", "[other]"]);
+    assert.equal(diagnostic.targetFields.id, true);
+    assert.equal(diagnostic.targetFields.marketplace_listing_title, true);
+    assert.equal(diagnostic.targetFields.listing_price, true);
+    assert.equal(diagnostic.targetFields.redacted_description, true);
+    assert.equal(diagnostic.targetFields.location, false);
+    assert.equal(diagnostic.targetFields.location_text, true);
+    assert.equal(diagnostic.targetFields.vehicle_transmission_type, true);
+    assert.equal(diagnostic.targetFields.vehicle_odometer_data, true);
+    assert.doesNotMatch(JSON.stringify(diagnostic), /private|2013|12,000|70,000|102/);
+    return true;
+  });
+  scenario.rejected["102"].errors[0].severity = "private-severity";
+  scenario.rejected["102"].errors[0].is_transient = "private-flag";
+  await assert.rejects(scenario.client.getListingDetail("102"), error => {
+    assert.equal(error.facebookDetailDiagnostic.errors[0].severity, "[other]");
+    assert.equal(error.facebookDetailDiagnostic.errors[0].flags.is_transient, "string");
+    assert.doesNotMatch(JSON.stringify(error.facebookDetailDiagnostic), /private/);
+    return true;
+  });
+});
+
 test("collector transport that loses the listing error identity remains fatal", async t => {
   const scenario = setup(t);
   const transported = await executeCollectorJob(scenario.client, {
