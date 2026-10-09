@@ -82,6 +82,9 @@ export function createRemoteCollector({store, now=Date.now, sleep=ms=>new Promis
         if(job?.status==='completed') return job.result;
         if(job?.status==='failed') {
           const error=new Error(job.error?.message??'Computer collector request failed.');
+          if(job.error?.code==='FACEBOOK_COOLDOWN') {error.code=job.error.code;error.retryAt=job.error.retryAt;}
+          if(job.error?.name==='ListingDetailUnavailableError') error.name=job.error.name;
+          if(job.error?.detailDiagnostic) error.facebookDetailDiagnostic=job.error.detailDiagnostic;
           if(job.error?.inspection) error.searchInspection=job.error.inspection;
           throw error;
         }

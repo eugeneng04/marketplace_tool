@@ -11,7 +11,11 @@ export async function executeCollectorJob(client,job) {
     const value=await client[job.operation](...job.args);
     return {result:{value, ...(job.operation==='searchListings'?{inspection:client.lastSearchInspection}: {})}};
   } catch(error) {
-    return {error:{message:sanitizeFacebookEvidence(error.message,client.session??{}), ...(error.searchInspection?{inspection:error.searchInspection}: {})}};
+    return {error:{message:sanitizeFacebookEvidence(error.message,client.session??{}),
+      ...(error.code==='FACEBOOK_COOLDOWN'?{code:error.code,retryAt:error.retryAt}: {}),
+      ...(error.name==='ListingDetailUnavailableError'?{name:error.name}: {}),
+      ...(error.facebookDetailDiagnostic?{detailDiagnostic:error.facebookDetailDiagnostic}: {}),
+      ...(error.searchInspection?{inspection:error.searchInspection}: {})}};
   }
 }
 

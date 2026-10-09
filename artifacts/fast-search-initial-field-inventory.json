@@ -1,0 +1,361 @@
+{
+  "provenance": "Retained sanitized initial-search schema inspection, read October 9, 2026. Historical observation, not new acceptance.",
+  "listingCount": 15,
+  "detailRequests": 0,
+  "fields": [
+    {
+      "path": "listings",
+      "types": [
+        "array"
+      ],
+      "occurrences": 1,
+      "nonNull": 1
+    },
+    {
+      "path": "listings[].__isMarketplaceListingRenderable",
+      "types": [
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].__isMarketplaceListingWithChildListings",
+      "types": [
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].__isMarketplaceListingWithDeliveryOptions",
+      "types": [
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].__typename",
+      "types": [
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].custom_sub_titles_with_rendering_flags",
+      "types": [
+        "array"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].custom_sub_titles_with_rendering_flags[].subtitle",
+      "types": [
+        "string"
+      ],
+      "occurrences": 11,
+      "nonNull": 11
+    },
+    {
+      "path": "listings[].custom_title",
+      "types": [
+        "null",
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 11
+    },
+    {
+      "path": "listings[].delivery_types",
+      "types": [
+        "array"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].id",
+      "types": [
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].is_hidden",
+      "types": [
+        "boolean"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].is_live",
+      "types": [
+        "boolean"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].is_pending",
+      "types": [
+        "boolean"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].is_sold",
+      "types": [
+        "boolean"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].is_viewer_seller",
+      "types": [
+        "boolean"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].listing_price",
+      "types": [
+        "object"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].listing_price.amount_with_offset_in_currency",
+      "types": [
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].listing_price.formatted_amount",
+      "types": [
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].location",
+      "types": [
+        "object"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].location.reverse_geocode",
+      "types": [
+        "object"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].location.reverse_geocode.city",
+      "types": [
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].location.reverse_geocode.city_page",
+      "types": [
+        "object"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].location.reverse_geocode.city_page.display_name",
+      "types": [
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].location.reverse_geocode.city_page.id",
+      "types": [
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].location.reverse_geocode.state",
+      "types": [
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].marketplace_listing_category_id",
+      "types": [
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].marketplace_listing_seller",
+      "types": [
+        "object"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].marketplace_listing_seller.__typename",
+      "types": [
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].marketplace_listing_seller.id",
+      "types": [
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].marketplace_listing_seller.name",
+      "types": [
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].marketplace_listing_title",
+      "types": [
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].max_listing_price",
+      "types": [
+        "null"
+      ],
+      "occurrences": 15,
+      "nonNull": 0
+    },
+    {
+      "path": "listings[].min_listing_price",
+      "types": [
+        "null"
+      ],
+      "occurrences": 15,
+      "nonNull": 0
+    },
+    {
+      "path": "listings[].origin_group",
+      "types": [
+        "null"
+      ],
+      "occurrences": 15,
+      "nonNull": 0
+    },
+    {
+      "path": "listings[].parent_listing",
+      "types": [
+        "null"
+      ],
+      "occurrences": 15,
+      "nonNull": 0
+    },
+    {
+      "path": "listings[].pre_recorded_videos",
+      "types": [
+        "array"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].pre_recorded_videos[].id",
+      "types": [
+        "string"
+      ],
+      "occurrences": 5,
+      "nonNull": 5
+    },
+    {
+      "path": "listings[].primary_listing_photo",
+      "types": [
+        "object"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].primary_listing_photo.__typename",
+      "types": [
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].primary_listing_photo.id",
+      "types": [
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].primary_listing_photo.image",
+      "types": [
+        "object"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].primary_listing_photo.image.uri",
+      "types": [
+        "string"
+      ],
+      "occurrences": 15,
+      "nonNull": 15
+    },
+    {
+      "path": "listings[].strikethrough_price",
+      "types": [
+        "null",
+        "object"
+      ],
+      "occurrences": 15,
+      "nonNull": 3
+    },
+    {
+      "path": "listings[].strikethrough_price.formatted_amount",
+      "types": [
+        "string"
+      ],
+      "occurrences": 3,
+      "nonNull": 3
+    }
+  ]
+}

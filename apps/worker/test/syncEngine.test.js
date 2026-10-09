@@ -2,21 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runProfileSync } from "../src/syncEngine.js";
 import { createFacebookConnector } from "../src/facebookConnector.js";
+import { memoryObservationDbOps } from "./helpers/observationDbOps.js";
 
-function makeDbOps() {
-  return {
-    async startSearchRun() { return { id: "run-1" }; },
-    async getItemRefreshState() { return null; },
-    async upsertRawItemSnapshot() { return { itemId: "item-1", isNew: true }; },
-    async saveParsedItem() {},
-    async computeMarketStats() { return { medianPrice: 10000, sampleSize: 1 }; },
-    async upsertDealScore() {},
-    async finishSearchRun(_db, _runId, summary) {
-      assert.equal(summary.status, "completed");
-      return 0;
-    }
-  };
-}
+function makeDbOps() { return memoryObservationDbOps().ops; }
 
 function makeConnector() {
   let detailRequests = 0;
@@ -61,7 +49,7 @@ function makeConnector() {
   };
 }
 
-test("new GraphQL listings are enriched with a real description", async () => {
+test("new GraphQL listings persist cards without opening detail pages", async () => {
   const connector = makeConnector();
   const run = await runProfileSync({
     db: {}, connector, profile: { id: "profile-1", query: "Civic", filtersJson: {} },
@@ -70,11 +58,11 @@ test("new GraphQL listings are enriched with a real description", async () => {
 
   assert.equal(run.status, "completed");
   assert.equal(run.resultsFound, 1);
-  assert.equal(run.detailPagesOpened, 1);
-  assert.equal(connector.detailRequests, 1);
+  assert.equal(run.detailPagesOpened, 0);
+  assert.equal(connector.detailRequests, 0);
 });
 
-test("all eligible details are fetched sequentially so the shared limiter can pace them", async () => {
+test("all rich search cards persist without any detail requests", async () => {
   const connector = makeConnector();
   const [base] = (await connector.captureListingCards({})).cards;
   connector.captureListingCards = async () => ({
@@ -102,12 +90,12 @@ test("all eligible details are fetched sequentially so the shared limiter can pa
 
   assert.equal(run.status, "completed");
   assert.equal(run.resultsFound, 7);
-  assert.equal(run.detailPagesOpened, 7);
-  assert.equal(connector.detailRequests, 7);
-  assert.equal(maximumActive, 1);
+  assert.equal(run.detailPagesOpened, 0);
+  assert.equal(connector.detailRequests, 0);
+  assert.equal(maximumActive, 0);
 });
 
-test("placeholder search cards fetch details before being counted and saved", async () => {
+test("cursor-only placeholder cards without a cache are excluded", async () => {
   const connector = makeConnector();
   connector.captureListingCards = async () => ({
     capturedAt: new Date(),
@@ -130,9 +118,11 @@ test("placeholder search cards fetch details before being counted and saved", as
   });
   const saved = [];
   const dbOps = makeDbOps();
+  const persist = dbOps.upsertRawItemSnapshot;
   dbOps.upsertRawItemSnapshot = async (_db, args) => {
-    saved.push(args.rawItem);
-    return { itemId: "corvette-item", isNew: true };
+    const result = await persist(_db, args);
+    saved.push(result.rawItem);
+    return result;
   };
 
   const run = await runProfileSync({
@@ -140,9 +130,9 @@ test("placeholder search cards fetch details before being counted and saved", as
   });
 
   assert.equal(run.status, "completed");
-  assert.equal(run.resultsFound, 1);
-  assert.equal(run.detailPagesOpened, 1);
-  assert.equal(saved[0].titleRaw, "2020 Chevrolet Corvette");
+  assert.equal(run.resultsFound, 0);
+  assert.equal(run.detailPagesOpened, 0);
+  assert.deepEqual(saved, []);
 });
 
 test("placeholder cards reuse saved listing data instead of re-fetching every known result", async () => {
@@ -175,8 +165,11 @@ test("placeholder cards reuse saved listing data instead of re-fetching every kn
     last_scraped_at: new Date(Date.now() - 60 * 60 * 1000).toISOString()
   });
   dbOps.upsertRawItemSnapshot = async (_db, args) => {
-    saved.push(args.rawItem);
-    return { itemId: "existing-corvette-item", isNew: false };
+    const cache = await dbOps.getItemRefreshState();
+    const memory = memoryObservationDbOps({ states: new Map([[args.rawItem.sourceItemId, cache]]) });
+    const result = await memory.ops.upsertRawItemSnapshot(_db, args);
+    saved.push(result.rawItem);
+    return result;
   };
 
   const run = await runProfileSync({
@@ -192,7 +185,7 @@ test("placeholder cards reuse saved listing data instead of re-fetching every kn
   assert.deepEqual(saved[0].imageUrls, ["https://example.test/corvette.jpg"]);
 });
 
-test("detail-dependent search filters still fetch listing details", async () => {
+test("missing transmission persists as an unknown candidate", async () => {
   const connector = makeConnector();
   const run = await runProfileSync({
     db: {}, connector,
@@ -202,11 +195,60 @@ test("detail-dependent search filters still fetch listing details", async () => 
 
   assert.equal(run.status, "completed");
   assert.equal(run.resultsFound, 1);
-  assert.equal(run.detailPagesOpened, 1);
-  assert.equal(connector.detailRequests, 1);
+  assert.equal(run.matchCount, 0);
+  assert.equal(run.unknownCount, 1);
+  assert.equal(run.alertsCreated, 0);
+  assert.equal(run.detailPagesOpened, 0);
+  assert.equal(connector.detailRequests, 0);
 });
 
-test("title and year filters eliminate cards before detail requests", async () => {
+test("known contradictions are excluded while missing required evidence remains visible", async () => {
+  const connector = makeConnector();
+  const [card] = (await connector.captureListingCards()).cards;
+  connector.captureListingCards = async () => ({ capturedAt: new Date(), cards: [
+    { ...card, sourceItemId: "unknown" },
+    { ...card, sourceItemId: "automatic", titleRaw: "2013 Honda Civic Si automatic" },
+    { ...card, sourceItemId: "manual", titleRaw: "2013 Honda Civic Si manual clean title" }
+  ] });
+  const memory = memoryObservationDbOps();
+  const run = await runProfileSync({ db: {}, connector, dbOps: memory.ops,
+    profile: { id: "manual-only", filtersJson: { transmission: "manual", cleanTitleOnly: true } } });
+  assert.equal(run.resultsFound, 2);
+  assert.equal(run.matchCount, 1);
+  assert.equal(run.unknownCount, 1);
+  assert.deepEqual(memory.snapshots.map(raw => raw.sourceItemId), ["unknown", "manual"]);
+  assert.equal(run.alertsCreated, 0);
+  assert.equal(connector.detailRequests, 0);
+});
+
+test("only qualified fresh cached details can produce alerts on a card-only run", async () => {
+  const connector = makeConnector();
+  const [card] = (await connector.captureListingCards()).cards;
+  const now = new Date().toISOString();
+  const makeCached = (id, fields = {}) => ({
+    id, status: "new", title_raw: card.titleRaw,
+    description_raw: "Manual transmission, clean title, 70,000 miles", price_raw: "$12,000", current_price: 12000,
+    last_scraped_at: now, parsed_attributes_json: {}, ...fields
+  });
+  const states = new Map([
+    ["fresh", makeCached("fresh")],
+    ["stale", makeCached("stale", { last_scraped_at: new Date(Date.now() - 25 * 3_600_000).toISOString() })],
+    ["incomplete", makeCached("incomplete", { parsed_attributes_json: { detailRefresh: { status: "incomplete" } } })],
+    ["unknown", makeCached("unknown", { description_raw: "Seller description" })]
+  ]);
+  connector.captureListingCards = async () => ({ capturedAt: new Date(), cards: [...states.keys()].map(id => ({ ...card, sourceItemId: id })) });
+  const memory = memoryObservationDbOps({ states });
+  const run = await runProfileSync({ db: {}, connector, dbOps: memory.ops,
+    profile: { id: "manual-only", filtersJson: { transmission: "manual", cleanTitleOnly: true } } });
+  assert.equal(run.resultsFound, 4);
+  assert.equal(run.matchCount, 3);
+  assert.equal(run.unknownCount, 1);
+  assert.equal(run.alertsCreated, 1);
+  assert.deepEqual(memory.finishes[0].alertIds, ["fresh"]);
+  assert.equal(run.detailPagesOpened, 0);
+});
+
+test("confirmed generation contradictions exclude cards", async () => {
   const connector = makeConnector();
   const run = await runProfileSync({
     db: {}, connector,
@@ -225,7 +267,7 @@ test("title and year filters eliminate cards before detail requests", async () =
   assert.equal(connector.detailRequests, 0);
 });
 
-test("GraphQL HTTP search enriches a new listing and persists its description", async (t) => {
+test("GraphQL HTTP search persists cards with only the search operation", async (t) => {
   const graphqlCalls = [];
   t.mock.method(globalThis, "fetch", async (url, options = {}) => {
     if (String(url).includes("/marketplace/")) {
@@ -258,9 +300,11 @@ test("GraphQL HTTP search enriches a new listing and persists its description", 
   connector.client.scheduleRequest = (request) => request();
   const persisted = [];
   const dbOps = makeDbOps();
+  const persist = dbOps.upsertRawItemSnapshot;
   dbOps.upsertRawItemSnapshot = async (_db, args) => {
-    persisted.push(args.rawItem);
-    return { itemId: "item-graphql-1", isNew: true };
+    const result = await persist(_db, args);
+    persisted.push(result.rawItem);
+    return result;
   };
   const run = await runProfileSync({
     db: {}, connector,
@@ -271,16 +315,16 @@ test("GraphQL HTTP search enriches a new listing and persists its description", 
     dbOps
   });
 
-  assert.deepEqual(graphqlCalls, ["7111939778879383", "26924013917190310"]);
+  assert.deepEqual(graphqlCalls, ["7111939778879383"]);
   assert.equal(run.status, "completed");
   assert.equal(run.resultsFound, 1);
-  assert.equal(run.detailPagesOpened, 1);
+  assert.equal(run.detailPagesOpened, 0);
   assert.equal(persisted[0].sourceItemId, "listing-graphql-1");
   assert.equal(persisted[0].imageUrls[0], "https://example.test/car.jpg");
-  assert.equal(persisted[0].descriptionRaw, "Manual transmission; clean title; 72,000 miles");
+  assert.equal(persisted[0].descriptionRaw, undefined);
 });
 
-test("placeholder GraphQL response falls back to Marketplace cards and enriches new results", async (t) => {
+test("placeholder GraphQL response persists the HTML fallback card without details", async (t) => {
   let graphqlCalls = 0;
   let pageCalls = 0;
   t.mock.method(globalThis, "fetch", async (url, options = {}) => {
@@ -315,9 +359,11 @@ test("placeholder GraphQL response falls back to Marketplace cards and enriches 
   connector.client.scheduleRequest = (request) => request();
   const persisted = [];
   const dbOps = makeDbOps();
+  const persist = dbOps.upsertRawItemSnapshot;
   dbOps.upsertRawItemSnapshot = async (_db, args) => {
-    persisted.push(args.rawItem);
-    return { itemId: "item-998877", isNew: true };
+    const result = await persist(_db, args);
+    persisted.push(result.rawItem);
+    return result;
   };
   const run = await runProfileSync({
     db: {}, connector,
@@ -328,13 +374,63 @@ test("placeholder GraphQL response falls back to Marketplace cards and enriches 
     dbOps
   });
 
-  assert.equal(graphqlCalls, 2);
+  assert.equal(graphqlCalls, 1);
   assert.equal(pageCalls, 1);
   assert.equal(run.status, "completed");
   assert.equal(run.resultsFound, 1);
-  assert.equal(run.detailPagesOpened, 1);
+  assert.equal(run.detailPagesOpened, 0);
   assert.equal(persisted[0].sourceItemId, "998877");
   assert.equal(persisted[0].titleRaw, "2007 Chevrolet Corvette Coupe 2D");
   assert.deepEqual(persisted[0].imageUrls, ["https://images.example.test/corvette.jpg"]);
-  assert.equal(persisted[0].descriptionRaw, "Clean title and 48,000 miles");
+  assert.equal(persisted[0].descriptionRaw, undefined);
+});
+
+test("a new manual card is not filtered by stale cached automatic attributes before the authoritative upsert", async () => {
+  const connector = makeConnector();
+  const cardTitle = "2013 Honda Civic Si manual";
+  connector.captureListingCards = async () => ({
+    capturedAt: new Date(),
+    cards: [{
+      rank: 1,
+      sourceItemId: "stale-auto-1",
+      listingUrl: "https://www.facebook.com/marketplace/item/stale-auto-1/",
+      titleRaw: cardTitle,
+      priceRaw: "$12,000",
+      locationRaw: "Oakland",
+      thumbnailUrl: "https://example.test/thumb.jpg",
+      rawCardText: `${cardTitle} $12,000 Oakland`,
+      sourceMetadata: { postedDate: new Date().toISOString() }
+    }]
+  });
+  const staleCached = {
+    status: "new",
+    title_raw: "2013 Honda Civic Si",
+    description_raw: "Automatic transmission",
+    price_raw: "$12,000",
+    current_price: 12000,
+    location_raw: "Oakland",
+    image_urls: [],
+    seller_raw: null,
+    posted_at: new Date().toISOString(),
+    last_scraped_at: null,
+    parsed_attributes_json: { marketplaceAttributes: { transmission: "Automatic" } }
+  };
+  const dbOps = makeDbOps();
+  dbOps.getItemRefreshState = async () => staleCached;
+  const seen = [];
+  const inner = dbOps.upsertRawItemSnapshot;
+  dbOps.upsertRawItemSnapshot = async (_db, args) => {
+    seen.push(args.rawItem);
+    return inner(_db, args);
+  };
+  const run = await runProfileSync({
+    db: {}, connector,
+    profile: { id: "manual-only", query: "Civic", filtersJson: { transmission: "manual" } },
+    dbOps
+  });
+  assert.equal(run.status, "completed");
+  assert.equal(run.resultsFound, 1);
+  assert.equal(run.unknownCount + run.matchCount, 1);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].titleRaw, cardTitle);
 });

@@ -1,5 +1,8 @@
 import { Pool } from "pg";
-import { createId, nowIso } from "./utils.js";
+import { createId, nowIso, parsePrice } from "./utils.js";
+import { mergeListingObservation, rawItemFromListing, listingCollectionState, parseListingObservation } from "./listingDetails.js";
+import { qualifyProfile } from "./profileQualification.js";
+import { scoreListing } from "./dealScoring.js";
 import { SUGGESTED_GENERATIONS, validateGeneration } from "./vehicleGenerations.js";
 
 const SCHEMA_SQL = `
@@ -509,7 +512,7 @@ export async function listDeals(db, limit = 30) {
     `,
     [Math.max(1, Math.min(Number(limit) || 30, 100))]
   );
-  return result.rows;
+  return addListingCollectionState(db, result.rows);
 }
 
 export async function createDealAlert(db, profileId, itemId) {
@@ -622,10 +625,7 @@ export async function getItemRefreshState(db, identity) {
 
   const result = await db.pool.query(
     `
-    SELECT id, status, title_raw, description_raw, price_raw, current_price,
-           location_raw, image_urls, seller_raw, posted_at, last_scraped_at, updated_at,
-           parsed_attributes_json
-    FROM items
+    SELECT * FROM items
     WHERE ($1::TEXT IS NOT NULL AND normalized_url = $1)
        OR ($2::TEXT IS NOT NULL AND source = 'facebook_marketplace' AND source_item_id = $2)
     ORDER BY updated_at DESC
@@ -722,222 +722,116 @@ export async function listRuns(db, profileId, limit = 50) {
 }
 
 export async function upsertRawItemSnapshot(db, args) {
-  const { profile, runId, rank, rawItem, parsedPrice, detailRefresh } = args;
+  const { profile, runId, rank, itemId: requestedItemId, preferManualTransmission } = args;
+  const observedAt = new Date(args.observedAt ?? args.rawItem.capturedAt ?? nowIso()).toISOString();
   const client = await db.pool.connect();
   try {
     await client.query("BEGIN");
-
     const existingResult = await client.query(
-      `
-      SELECT * FROM items
-      WHERE normalized_url = $1
-         OR (source = $2 AND source_item_id = $3)
-      ORDER BY updated_at DESC
-      LIMIT 1
-      FOR UPDATE
-      `,
-      [rawItem.normalizedUrl, rawItem.source, rawItem.sourceItemId ?? null]
+      `SELECT * FROM items
+       WHERE ($1::TEXT IS NOT NULL AND id = $1)
+          OR ($1::TEXT IS NULL AND (normalized_url = $2 OR (source = $3 AND source_item_id = $4)))
+       ORDER BY updated_at DESC LIMIT 1 FOR UPDATE`,
+      [requestedItemId ?? null, args.rawItem.normalizedUrl, args.rawItem.source, args.rawItem.sourceItemId ?? null]
     );
-
-    let itemId;
-    let isNew = false;
-    let previousPrice = null;
-    const now = nowIso();
-
-    if (existingResult.rows.length === 0) {
-      itemId = createId();
-      isNew = true;
-      await client.query(
-        `
-        INSERT INTO items (
-          id, category, source, source_item_id, url, normalized_url, fingerprint,
-          title_raw, description_raw, price_raw, location_raw, image_urls, seller_raw,
-          current_price, location_city, location_region, status,
-          first_seen_at, last_seen_at, posted_at, last_scraped_at,
-          created_at, updated_at
-        ) VALUES (
-          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,'new',$17::timestamptz,$17::timestamptz,$18::timestamptz,CASE WHEN $19 THEN $17::timestamptz ELSE NULL END,$17::timestamptz,$17::timestamptz
-        )
-        `,
-        [
-          itemId,
-          profile.category,
-          rawItem.source,
-          rawItem.sourceItemId ?? null,
-          rawItem.url,
-          rawItem.normalizedUrl,
-          rawItem.fingerprint ?? null,
-          rawItem.titleRaw,
-          rawItem.descriptionRaw ?? null,
-          rawItem.priceRaw ?? null,
-          rawItem.locationRaw ?? null,
-          JSON.stringify(rawItem.imageUrls ?? []),
-          rawItem.sellerRaw ?? null,
-          parsedPrice,
-          rawItem.locationCity ?? null,
-          rawItem.locationRegion ?? profile.location,
-          now,
-          nullableTimestamp(rawItem.sourceMetadata?.postedDate),
-          rawItem.sourceMetadata?.detailFetched === true
-        ]
-      );
-
-      if (parsedPrice !== null) {
-        await client.query(
-          "INSERT INTO price_history (id, item_id, price, price_raw, captured_at) VALUES ($1,$2,$3,$4,$5)",
-          [createId(), itemId, parsedPrice, rawItem.priceRaw ?? null, now]
-        );
-      }
-    } else {
-      const existing = existingResult.rows[0];
-      itemId = existing.id;
-      previousPrice = existing.current_price;
-      await client.query(
-        `
-        UPDATE items
-        SET
-          title_raw = $2,
-          description_raw = CASE WHEN $12 THEN COALESCE($3, description_raw) ELSE description_raw END,
-          price_raw = COALESCE($4, price_raw),
-          location_raw = COALESCE($5, location_raw),
-          image_urls = CASE WHEN $12 AND jsonb_array_length($6::jsonb) > 0 THEN $6::jsonb ELSE image_urls END,
-          seller_raw = COALESCE($7, seller_raw),
-          current_price = COALESCE($8, current_price),
-          source_item_id = COALESCE($9, source_item_id),
-          posted_at = COALESCE($11::timestamptz, posted_at),
-          last_seen_at = $10::timestamptz,
-          last_scraped_at = CASE WHEN $12 THEN $10::timestamptz ELSE last_scraped_at END,
-          updated_at = $10::timestamptz
-        WHERE id = $1
-        `,
-        [
-          itemId,
-          rawItem.titleRaw,
-          rawItem.descriptionRaw ?? null,
-          rawItem.priceRaw ?? null,
-          rawItem.locationRaw ?? null,
-          JSON.stringify(rawItem.imageUrls ?? []),
-          rawItem.sellerRaw ?? null,
-          parsedPrice,
-          rawItem.sourceItemId ?? null,
-          now,
-          nullableTimestamp(rawItem.sourceMetadata?.postedDate),
-          rawItem.sourceMetadata?.detailFetched === true
-        ]
-      );
-
-      if (parsedPrice !== null && previousPrice !== parsedPrice) {
-        await client.query(
-          "INSERT INTO price_history (id, item_id, price, price_raw, captured_at) VALUES ($1,$2,$3,$4,$5)",
-          [createId(), itemId, parsedPrice, rawItem.priceRaw ?? null, now]
-        );
-      }
+    const existing = existingResult.rows[0];
+    if (requestedItemId && !existing) throw new Error("Listing not found");
+    const itemId = existing?.id ?? createId();
+    const isNew = !existing;
+    const latestObservation = existing ? Math.max(
+      new Date(existing.last_seen_at ?? 0).getTime(),
+      new Date(existing.last_scraped_at ?? 0).getTime()
+    ) : 0;
+    const applied = new Date(observedAt).getTime() >= latestObservation;
+    const rawItem = applied ? mergeListingObservation(existing, args.rawItem) : rawItemFromListing(existing);
+    const priorEvidence = existing ? (await client.query(
+      'SELECT field,value,confidence,evidence_text AS "evidenceText" FROM parse_evidence WHERE item_id=$1', [itemId]
+    )).rows : [];
+    const priorModifications = existing ? (await client.query(
+      'SELECT mod_type AS "modType",mod_name AS "modName",brand,confidence,evidence_text AS "evidenceText" FROM modifications WHERE item_id=$1', [itemId]
+    )).rows : [];
+    const parsed = parseListingObservation(existing, applied ? args.rawItem : {}, {
+      evidence: priorEvidence, modifications: priorModifications
+    });
+    const qualification = profile ? qualifyProfile(profile, rawItem, parsed) : null;
+    if (qualification?.state === "mismatch") {
+      await client.query("COMMIT");
+      return { itemId, isNew: false, excluded: true, qualification };
     }
-
-    if (detailRefresh) {
-      await client.query(
-        "UPDATE items SET parsed_attributes_json = jsonb_set(parsed_attributes_json, '{detailRefresh}', $2::jsonb) WHERE id = $1",
-        [itemId, JSON.stringify(detailRefresh)]
-      );
-    }
-
-    await client.query(
-      "INSERT INTO search_hits (id, search_run_id, item_id, rank, seen_at) VALUES ($1,$2,$3,$4,$5)",
-      [createId(), runId, itemId, rank, now]
-    );
-
-    await client.query(
-      `
-      INSERT INTO item_snapshots (
-        id, item_id, captured_at, title_raw, price_raw, parsed_price, description_raw, location_raw, image_urls, availability_status
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)
-      `,
-      [
-        createId(),
-        itemId,
-        now,
-        rawItem.titleRaw,
-        rawItem.priceRaw ?? null,
-        parsedPrice,
-        rawItem.descriptionRaw ?? null,
-        rawItem.locationRaw ?? null,
-        JSON.stringify(rawItem.imageUrls ?? []),
-        "active"
-      ]
-    );
-
-    await client.query("COMMIT");
-
-    return {
-      itemId,
-      isNew,
-      priceChanged: parsedPrice !== null && previousPrice !== null && previousPrice !== parsedPrice
+    const detailFetched = applied && args.rawItem.sourceMetadata?.detailFetched === true;
+    const parsedPrice = parsePrice(rawItem.priceRaw) ?? existing?.current_price ?? null;
+    const previousAttributes = existing?.parsed_attributes_json ?? {};
+    if (detailFetched) parsed.attributes.detailRefresh = { status: "complete", attemptedAt: observedAt };
+    else if (previousAttributes.detailRefresh) parsed.attributes.detailRefresh = previousAttributes.detailRefresh;
+    if (parsedPrice !== null) parsed.attributes.price = parsedPrice;
+    const previousPrice = existing?.current_price ?? null;
+    const item = {
+      ...existing, id: itemId, category: existing?.category ?? profile.category,
+      source: existing?.source ?? rawItem.source, source_item_id: rawItem.sourceItemId ?? existing?.source_item_id,
+      url: existing?.url ?? rawItem.url, normalized_url: existing?.normalized_url ?? rawItem.normalizedUrl,
+      title_raw: rawItem.titleRaw, description_raw: rawItem.descriptionRaw ?? null,
+      price_raw: rawItem.priceRaw ?? null, current_price: parsedPrice,
+      location_raw: rawItem.locationRaw ?? null, location_city: rawItem.locationCity ?? null,
+      location_region: rawItem.locationRegion ?? existing?.location_region ?? profile?.location ?? null,
+      image_urls: rawItem.imageUrls ?? [], seller_raw: rawItem.sellerRaw ?? null,
+      posted_at: nullableTimestamp(rawItem.sourceMetadata?.postedDate),
+      status: existing?.status ?? "new", first_seen_at: existing?.first_seen_at ?? observedAt,
+      last_seen_at: runId || isNew ? observedAt : existing.last_seen_at,
+      last_scraped_at: detailFetched ? observedAt : existing?.last_scraped_at ?? null,
+      parsed_attributes_json: parsed.attributes
     };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-export async function saveParsedItem(db, itemId, parsed) {
-  const client = await db.pool.connect();
-  try {
-    await client.query("BEGIN");
-
-    await client.query(
-      `
-      UPDATE items
-      SET parsed_attributes_json = $2::jsonb,
-          red_flags_json = $3::jsonb,
-          positive_signals_json = $4::jsonb,
-          parser_version = $5,
-          updated_at = $6
-      WHERE id = $1
-      `,
-      [
-        itemId,
-        JSON.stringify(parsed.attributes),
-        JSON.stringify(parsed.redFlags),
-        JSON.stringify(parsed.positiveSignals),
-        parsed.parserVersion,
-        nowIso()
-      ]
-    );
-
-    await client.query("DELETE FROM parse_evidence WHERE item_id = $1", [itemId]);
-    for (const evidence of parsed.evidence) {
+    if (isNew) {
       await client.query(
-        `
-        INSERT INTO parse_evidence (id, item_id, field, value, confidence, evidence_text, parser_version, created_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-        `,
-        [
-          createId(),
-          itemId,
-          evidence.field,
-          evidence.value === null || evidence.value === undefined ? null : `${evidence.value}`,
-          evidence.confidence,
-          evidence.evidenceText,
-          parsed.parserVersion,
-          nowIso()
-        ]
+        `INSERT INTO items (
+           id, category, source, source_item_id, url, normalized_url, fingerprint,
+           title_raw, description_raw, price_raw, location_raw, image_urls, seller_raw,
+           current_price, location_city, location_region, status, first_seen_at, last_seen_at,
+           posted_at, last_scraped_at, created_at, updated_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,'new',$17,$17,$18,$19,$17,$17)`,
+        [itemId, item.category, item.source, item.source_item_id ?? null, item.url, item.normalized_url,
+          rawItem.fingerprint ?? null, item.title_raw, item.description_raw, item.price_raw, item.location_raw,
+          JSON.stringify(item.image_urls), item.seller_raw, parsedPrice, item.location_city,
+          item.location_region, observedAt, item.posted_at, item.last_scraped_at]
+      );
+    } else if (applied) {
+      await client.query(
+        `UPDATE items SET title_raw=$2, description_raw=$3, price_raw=$4, location_raw=$5,
+           image_urls=$6::jsonb, seller_raw=$7, current_price=$8, source_item_id=COALESCE($9,source_item_id),
+           posted_at=COALESCE($10::timestamptz,posted_at), last_seen_at=$11, last_scraped_at=$12,
+           location_city=COALESCE($13,location_city), location_region=COALESCE($14,location_region), updated_at=$15
+         WHERE id=$1`,
+        [itemId, item.title_raw, item.description_raw, item.price_raw, item.location_raw,
+          JSON.stringify(item.image_urls), item.seller_raw, parsedPrice, item.source_item_id ?? null,
+          item.posted_at, item.last_seen_at, item.last_scraped_at, item.location_city, item.location_region, observedAt]
       );
     }
-
-    await client.query("DELETE FROM modifications WHERE item_id = $1", [itemId]);
-    for (const mod of parsed.modifications) {
-      await client.query(
-        `
-        INSERT INTO modifications (id, item_id, category, mod_type, mod_name, brand, confidence, evidence_text)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-        `,
-        [createId(), itemId, "vehicle", mod.modType, mod.modName, mod.brand ?? null, mod.confidence, mod.evidenceText]
-      );
+    if (applied && parsedPrice !== null && previousPrice !== parsedPrice) {
+      await client.query("INSERT INTO price_history (id,item_id,price,price_raw,captured_at) VALUES ($1,$2,$3,$4,$5)",
+        [createId(), itemId, parsedPrice, rawItem.priceRaw ?? null, observedAt]);
     }
-
+    if (runId) {
+      await client.query("INSERT INTO search_hits (id,search_run_id,item_id,rank,seen_at) VALUES ($1,$2,$3,$4,$5)",
+        [createId(), runId, itemId, rank, observedAt]);
+    }
+    if (applied) {
+      await client.query(
+        `INSERT INTO item_snapshots (id,item_id,captured_at,title_raw,price_raw,parsed_price,description_raw,location_raw,image_urls,availability_status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)`,
+        [createId(), itemId, observedAt, rawItem.titleRaw, rawItem.priceRaw ?? null, parsedPrice,
+          rawItem.descriptionRaw ?? null, rawItem.locationRaw ?? null, JSON.stringify(rawItem.imageUrls ?? []),
+          rawItem.sourceMetadata?.isSold ? "sold" : rawItem.sourceMetadata?.isPending ? "pending" : "active"]
+      );
+      await writeParsedItem(client, itemId, parsed, observedAt);
+    }
+    const marketStats = await computeMarketStats({ pool: client }, {
+      category: item.category, excludeItemId: itemId, make: parsed.attributes.make ?? null,
+      model: parsed.attributes.model ?? null, locationRegion: item.location_region
+    });
+    const score = scoreListing({ itemPrice: parsedPrice, parsed, marketStats, preferManualTransmission });
+    if (applied) await upsertDealScore({ pool: client }, itemId, score, observedAt);
     await client.query("COMMIT");
+    return { itemId, isNew, applied, rawItem, parsed, score, item, qualification,
+      priceChanged: applied && previousPrice !== null && previousPrice !== parsedPrice };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -946,21 +840,42 @@ export async function saveParsedItem(db, itemId, parsed) {
   }
 }
 
-export async function updateListingDetail(db, itemId, rawItem) {
-  const result = await db.pool.query(
-    `UPDATE items SET
-       title_raw = COALESCE(NULLIF($2, ''), title_raw),
-       description_raw = COALESCE(NULLIF($3, ''), description_raw),
-       price_raw = COALESCE(NULLIF($4, ''), price_raw),
-       location_raw = COALESCE(NULLIF($5, ''), location_raw),
-       image_urls = CASE WHEN jsonb_array_length($6::jsonb) > 0 THEN $6::jsonb ELSE image_urls END,
-       seller_raw = COALESCE(NULLIF($7, ''), seller_raw),
-       posted_at = COALESCE($8::timestamptz, posted_at),
-       last_scraped_at = $9, updated_at = $9
-     WHERE id = $1 RETURNING id`,
-    [itemId, rawItem.titleRaw ?? "", rawItem.descriptionRaw ?? "", rawItem.priceRaw ?? "", rawItem.locationRaw ?? "", JSON.stringify(rawItem.imageUrls ?? []), rawItem.sellerRaw ?? "", nullableTimestamp(rawItem.sourceMetadata?.postedDate), nowIso()]
+async function writeParsedItem(client, itemId, parsed, observedAt) {
+  await client.query(
+    `UPDATE items SET parsed_attributes_json=$2::jsonb, red_flags_json=$3::jsonb,
+       positive_signals_json=$4::jsonb, parser_version=$5 WHERE id=$1`,
+    [itemId, JSON.stringify(parsed.attributes), JSON.stringify(parsed.redFlags), JSON.stringify(parsed.positiveSignals), parsed.parserVersion]
   );
-  return result.rowCount > 0;
+  await client.query("DELETE FROM parse_evidence WHERE item_id=$1", [itemId]);
+  for (const evidence of parsed.evidence) {
+    await client.query(
+      `INSERT INTO parse_evidence (id,item_id,field,value,confidence,evidence_text,parser_version,created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [createId(), itemId, evidence.field, evidence.value == null ? null : `${evidence.value}`,
+        evidence.confidence, evidence.evidenceText, parsed.parserVersion, observedAt]
+    );
+  }
+  await client.query("DELETE FROM modifications WHERE item_id=$1", [itemId]);
+  for (const mod of parsed.modifications) {
+    await client.query(
+      `INSERT INTO modifications (id,item_id,category,mod_type,mod_name,brand,confidence,evidence_text)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [createId(), itemId, "vehicle", mod.modType, mod.modName, mod.brand ?? null, mod.confidence, mod.evidenceText]
+    );
+  }
+}
+
+export async function markDetailRefreshIncomplete(db, itemId, observedAt, error) {
+  const marker = { status: "incomplete", attemptedAt: observedAt,
+    reason: error.name === "ListingDetailUnavailableError" ? "listing_rejected" : "refresh_failed",
+    ...(error.code === "FACEBOOK_COOLDOWN" ? { retryAt: new Date(error.retryAt).toISOString() } : {}) };
+  await db.pool.query(
+    `UPDATE items SET parsed_attributes_json=jsonb_set(parsed_attributes_json,'{detailRefresh}',$3::jsonb)
+     WHERE id=$1 AND (last_scraped_at IS NULL OR last_scraped_at <= $2::timestamptz)
+       AND (parsed_attributes_json->'detailRefresh'->>'attemptedAt' IS NULL
+         OR (parsed_attributes_json->'detailRefresh'->>'attemptedAt')::timestamptz <= $2::timestamptz)`,
+    [itemId, observedAt, JSON.stringify(marker)]
+  );
 }
 
 export async function listListings(db, filters = {}) {
@@ -1051,7 +966,33 @@ export async function listListings(db, filters = {}) {
     params
   );
 
-  return result.rows;
+  return addListingCollectionState(db, result.rows);
+}
+
+async function addListingCollectionState(db, items) {
+  if (!items.length) return [];
+  const [linked, modifications] = await Promise.all([db.pool.query(
+    `SELECT DISTINCT sh.item_id, p.* FROM search_hits sh
+     JOIN search_runs r ON r.id=sh.search_run_id
+     JOIN search_profiles p ON p.id=r.search_profile_id
+     WHERE sh.item_id=ANY($1::TEXT[]) ORDER BY sh.item_id,p.name,p.id`,
+    [items.map(item => item.id)]
+  ), db.pool.query("SELECT item_id,mod_type,mod_name FROM modifications WHERE item_id=ANY($1::TEXT[])", [items.map(item => item.id)])]);
+  const profilesByItem = new Map();
+  for (const row of linked.rows) {
+    const profiles = profilesByItem.get(row.item_id) ?? [];
+    profiles.push(mapProfileRow(row));
+    profilesByItem.set(row.item_id, profiles);
+  }
+  const now = Date.now();
+  const modificationsByItem = new Map();
+  for (const row of modifications.rows) {
+    const entries = modificationsByItem.get(row.item_id) ?? [];
+    entries.push(row);
+    modificationsByItem.set(row.item_id, entries);
+  }
+  return items.map(item => ({ ...item, ...listingCollectionState(item, profilesByItem.get(item.id) ?? [], now,
+    modificationsByItem.get(item.id) ?? []) }));
 }
 
 const LISTING_SORTS = {
@@ -1082,7 +1023,7 @@ export async function getListingById(db, itemId) {
     return null;
   }
 
-  const [item] = listingResult.rows;
+  const [item] = await addListingCollectionState(db, listingResult.rows);
 
   const [historyResult, evidenceResult, modificationsResult] = await Promise.all([
     db.pool.query("SELECT * FROM price_history WHERE item_id = $1 ORDER BY captured_at DESC LIMIT 100", [itemId]),
@@ -1092,6 +1033,8 @@ export async function getListingById(db, itemId) {
 
   return {
     item,
+    qualifications: item.qualifications,
+    detailRefresh: item.detailRefresh,
     priceHistory: historyResult.rows,
     parseEvidence: evidenceResult.rows,
     modifications: modificationsResult.rows
@@ -1145,7 +1088,7 @@ export async function computeMarketStats(db, args) {
   return result.rows[0];
 }
 
-export async function upsertDealScore(db, itemId, score) {
+export async function upsertDealScore(db, itemId, score, scoredAt = nowIso()) {
   await db.pool.query(
     `
     INSERT INTO deal_scores (
@@ -1176,7 +1119,7 @@ export async function upsertDealScore(db, itemId, score) {
       score.estimatedHigh,
       score.verdict,
       JSON.stringify(score.explanation),
-      nowIso()
+      scoredAt
     ]
   );
 }

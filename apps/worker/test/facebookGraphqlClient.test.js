@@ -273,7 +273,7 @@ test("Marketplace vehicle mileage fields are normalized even outside attribute_d
   assert.equal(listing.mileage, 53701);
 });
 
-test("sync fetches details only for incomplete, inconsistent, or stale listings", () => {
+test("detail freshness permits successful empty fields and refreshes missing, incomplete, inconsistent, or stale listings", () => {
   const recent = new Date().toISOString();
   const common = {
     status: "new",
@@ -286,8 +286,10 @@ test("sync fetches details only for incomplete, inconsistent, or stale listings"
   assert.equal(shouldFetchDetail({ ...common, current_price: 7800 }, 24), true);
   assert.equal(shouldFetchDetail({ ...common, current_price: 1234, image_urls: ["car.jpg", "side.jpg"] }, 24), false);
   assert.equal(shouldFetchDetail({ ...common, current_price: 1234 }, 24), false);
-  assert.equal(shouldFetchDetail({ ...common, current_price: 1234, description_raw: "  " }, 24), true);
-  assert.equal(shouldFetchDetail({ ...common, current_price: 1234, image_urls: [] }, 24), true);
+  assert.equal(shouldFetchDetail({ ...common, current_price: 1234, description_raw: "  " }, 24), false);
+  assert.equal(shouldFetchDetail({ ...common, current_price: 1234, image_urls: [] }, 24), false);
+  assert.equal(shouldFetchDetail({ ...common, current_price: 1234, last_scraped_at: null }, 24), true);
+  assert.equal(shouldFetchDetail({ ...common, current_price: 1234, parsed_attributes_json: { detailRefresh: { status: "incomplete" } } }, 24), true);
   assert.equal(shouldFetchDetail({ ...common, current_price: 1234, last_scraped_at: new Date(Date.now() - 25 * 3_600_000).toISOString() }, 24), true);
   assert.equal(shouldFetchDetail({ ...common, current_price: 1234, status: "saved", last_scraped_at: new Date(Date.now() - 13 * 3_600_000).toISOString() }, 24), true);
   assert.equal(shouldFetchDetail({ ...common, status: "hidden", image_urls: [] }, 24), false);

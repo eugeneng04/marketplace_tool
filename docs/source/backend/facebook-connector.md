@@ -46,14 +46,11 @@ Fields:
 
 ## Detail Fetch Policy
 
-Only fetch detail pages for:
-- new listings
-- stale listings
-- saved listings
-- contacted listings
-- listings missing important parsed fields
-- listings with an incomplete detail refresh
-- manual refresh requests
+Saved-search runs capture cards without per-listing detail requests. The database retains supplied card fields and cached detail evidence.
+
+Opening a saved listing displays the cache, then checks whether details are missing, stale, or incomplete. Saved and contacted listings use a shorter freshness window. A forced manual refresh bypasses freshness. Automatic detail enrichment uses the existing GraphQL detail operation without a separate gallery request. Photo enrichment requires an explicit request.
+
+Filter qualification is evaluated for each linked profile. Missing mileage, title, or transmission evidence stays unverified. Confirmed contradictions fail the relevant filters.
 
 ## Safety Constraint
 

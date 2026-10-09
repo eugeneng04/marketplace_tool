@@ -11,9 +11,9 @@ Every seen listing should be saved permanently unless deleted by the user.
 3. Check for duplicate.
 4. If new, create Item.
 5. Create ItemSnapshot.
-6. Fetch detail if needed.
-7. Parse item.
-8. Create PriceObservation.
+6. Parse available card fields.
+7. Create PriceObservation and deal score in the observation transaction.
+8. Retain candidates with missing filter evidence as unverified.
 
 ## Existing Listing Workflow
 
@@ -23,7 +23,8 @@ Every seen listing should be saved permanently unless deleted by the user.
 4. Create SearchHit.
 5. Create ItemSnapshot.
 6. Check for price changes.
-7. Only fetch detail if stale or needed.
+7. Reparse retained card and detail fields, preserving cached evidence.
+8. Update numeric price, changed-price history, and deal score in the observation transaction.
 
 ## Listing Statuses
 
@@ -38,12 +39,11 @@ Every seen listing should be saved permanently unless deleted by the user.
 
 ## Refresh Policy
 
-- new listing: fetch detail immediately
-- existing listing: update lastSeenAt only
-- saved listing: refresh every 12–24 hours
-- contacted listing: refresh every 12 hours
-- rejected listing: never refresh
-- possibly gone listing: check weekly or manually
+Search runs save cards without detail requests. Search observations update `last_seen_at`; successful detail observations update `last_scraped_at` separately. Concurrent observation writes lock the item row, and older observations cannot overwrite newer data.
+
+Opening a listing conditionally fetches missing, stale, or incomplete details. Ordinary details default to a 24-hour freshness window; saved and contacted listings use at most 12 hours. Linked profiles can set `staleDetailHours`. Fresh details return the cache unless the caller requests `force: true`. Extra photos require `fetchPhotos: true`.
+
+Collection preserves user workflow status, descriptions, photos, structured fields, and parsed evidence. Missing required filter evidence remains unverified for the relevant profile. Only a current match with fresh, complete details is eligible for deal alerts.
 
 ## Dedupe Layers
 

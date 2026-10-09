@@ -73,3 +73,18 @@ test('worker accepts only direct Facebook client operations',async()=>{
   assert.deepEqual(await executeCollectorJob({anything:()=>{called=true;}},{operation:'anything',args:[]}),{error:{message:'Unsupported collector job.'}});
   assert.equal(called,false);
 });
+
+test('routed detail refresh keeps photo options and cooldown retry metadata',async()=>{
+  const store=memoryStore();let broker;
+  const worker={async getListingDetail(id, options){
+    assert.equal(id,'123');assert.deepEqual(options,{fetchPhotos:false});
+    const error=new Error('Facebook request cooldown');error.code='FACEBOOK_COOLDOWN';error.retryAt=301000;throw error;
+  }};
+  broker=createRemoteCollector({store,now:()=>1000,sleep:async()=>{const job=await broker.poll();if(job)await broker.finish(job.id,await executeCollectorJob(worker,job));}});
+  await broker.enroll();await broker.heartbeat();await broker.enable(true);
+  const connector=createFacebookConnector({mode:'facebook_graphql',client:broker.routeClient({getListingDetail(){throw new Error('Unexpected Render fallback');}})});
+  await assert.rejects(connector.fetchListingDetail({sourceItemId:'123',listingUrl:'https://www.facebook.com/marketplace/item/123/'}),error=>{
+    assert.equal(error.code,'FACEBOOK_COOLDOWN');assert.equal(error.retryAt,301000);return true;
+  });
+  assert.equal(store.jobs.size,0);
+});

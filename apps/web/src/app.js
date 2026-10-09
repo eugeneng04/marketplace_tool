@@ -16,7 +16,7 @@ const state = {
   generations: [],
   facebookResults: [],
   locationChoices: [],
-  selectedListing: null
+  detailPanel: null
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -66,7 +66,7 @@ function getImageUrls(listing) {
     listing?.item?.images ??
     [];
   const normalized = Array.isArray(urls) ? urls : [];
-  const primary = listing?.imageUrl ?? listing?.item?.imageUrl;
+  const primary = listing?.imageUrl ?? listing?.thumbnailUrl ?? listing?.item?.imageUrl;
   return primary && !normalized.includes(primary) ? [primary, ...normalized] : normalized;
 }
 
@@ -79,6 +79,8 @@ function titleFor(listing) {
 }
 
 function priceFor(listing) {
+  const savedPrice = listing?.current_price ?? listing?.currentPrice;
+  if (savedPrice !== null && savedPrice !== undefined) return savedPrice;
   const rawPrice = `${listing?.price_raw ?? ""}`.trim();
   const match = rawPrice.match(/^(?:US\s*)?\$\s*([\d,]+(?:\.\d{1,2})?)$/i);
   if (match) {
@@ -105,6 +107,10 @@ function dealDisplay(listing) {
   const numericConfidence = confidence === null || confidence === undefined ? null : Number(confidence);
   if (numericScore === null || !Number.isFinite(numericScore) || numericConfidence === null || !Number.isFinite(numericConfidence)) {
     return { label: "Unscored", confirmed: false, tone: "muted", score: numericScore, confidence: numericConfidence };
+  }
+  if ((listing.detailRefresh && listing.detailRefresh.state !== "fresh") ||
+      (listing.qualifications ?? []).some(qualification => qualification.state !== "match")) {
+    return { label: "Needs review · unverified details or filters", confirmed: false, tone: "caution", score: numericScore, confidence: numericConfidence };
   }
   if (numericConfidence < 0.5) {
     return { label: "Needs review – low confidence", confirmed: false, tone: "caution", score: numericScore, confidence: numericConfidence };
@@ -404,17 +410,17 @@ async function refreshAll() {
   const button = $("#refreshButton");
   if (button.disabled) return;
   button.disabled = true;
-  button.textContent = "Refreshing…";
-  showActionStatus("#refreshStatus", "Refreshing saved data…");
+  button.textContent = "Reloading…";
+  showActionStatus("#refreshStatus", "Reloading saved data…");
   try {
     const results = await Promise.allSettled([loadProfiles(), loadGroups(), loadListings(), loadRuns(), loadDeals(), loadAlerts(), loadSearchDefaults(), loadVehicleGenerations()]);
     const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason.message);
     showActionStatus("#refreshStatus", errors.length
-      ? `Refresh incomplete: ${[...new Set(errors)].join("; ")}`
-      : "Saved data refreshed. Use Run all saved to search Facebook for new listings.");
+      ? `Reload incomplete: ${[...new Set(errors)].join("; ")}`
+      : "Saved data reloaded. Use Run all saved to search Facebook for new listings.");
   } finally {
     button.disabled = false;
-    button.textContent = "Refresh";
+    button.textContent = "Reload saved";
   }
 }
 
@@ -478,6 +484,36 @@ function vehicleLabel(listing) {
   return [attrs.year, attrs.make, attrs.model, attrs.trim, attrs.transmission].filter(Boolean).join(" ") || "n/a";
 }
 
+function qualificationHtml(view) {
+  const qualifications = view.qualifications ?? [];
+  const fieldLabels = {
+    generation: "generation", transmission: "transmission", yearMin: "minimum year",
+    yearMax: "maximum year", maxMileage: "mileage", cleanTitleOnly: "clean title", modifiedOnly: "modifications"
+  };
+  return qualifications.map((qualification) => {
+    const label = qualification.state === "match" ? "Filters match"
+      : qualification.state === "mismatch" ? "Filters failed" : "Unverified";
+    const fields = qualification.state === "mismatch" ? qualification.failedFields : qualification.missingFields;
+    const reason = (fields ?? []).map((field) => fieldLabels[field] ?? field).join(", ");
+    return `<div class="listing-meta"><span class="tag${qualification.state === "match" ? "" : " alert"}">${escapeHtml(qualification.profileName ?? qualification.profileId)} · ${label}</span>${reason ? ` ${qualification.state === "mismatch" ? "Failed" : "Missing"}: ${escapeHtml(reason)}` : ""}</div>`;
+  }).join("");
+}
+
+function detailRefreshHtml(view) {
+  const refresh = view.detailRefresh;
+  if (!refresh) return `<span class="listing-meta">Details unverified</span>`;
+  const labels = { missing: "Details not fetched", stale: "Details stale", fresh: "Details fresh", incomplete: "Details incomplete" };
+  return `<span class="listing-meta">${labels[refresh.state] ?? "Details unverified"}</span>`;
+}
+
+function attributeValue(value) {
+  if (Array.isArray(value)) return value.map(attributeValue).join(", ");
+  if (value && typeof value === "object") {
+    return Object.entries(value).map(([key, entry]) => `${key}: ${attributeValue(entry)}`).join(" · ");
+  }
+  return `${value ?? ""}`;
+}
+
 function renderProfiles() {
   $("#profilesCount").textContent = state.profiles.length;
   $("#profilesList").innerHTML =
@@ -522,6 +558,8 @@ function renderListings() {
                 <div>
                   <div class="listing-name">${escapeHtml(titleFor(listing))}</div>
                   <div class="listing-meta">${escapeHtml(listing.location_raw ?? "n/a")} · ${escapeHtml(listing.seller_raw ?? "unknown seller")}</div>
+                  ${qualificationHtml(listing)}
+                  ${detailRefreshHtml(listing)}
                 </div>
               </div>
             </td>
@@ -529,10 +567,10 @@ function renderListings() {
             <td data-label="Vehicle">
               <div>${escapeHtml(vehicleLabel(listing))}</div>
               ${listing.generation ? `<div class="listing-meta">${escapeHtml(listing.generation.code)} generation</div>` : ""}
-              <div class="listing-meta">${escapeHtml(attrs.mileage ?? attrs.miles ?? "")}</div>
+              <div class="listing-meta">${formatMiles(attrs.mileage ?? attrs.miles)}</div>
             </td>
             <td data-label="Status">${statusPill(listing.status)}</td>
-            <td data-label="Posted">${listing.posted_at ? compactDate(listing.posted_at) : "Date unavailable"}</td>
+            <td data-label="Posted">${listing.posted_at ? compactDate(listing.posted_at) : "Date unavailable"}<div class="listing-meta">Search observed ${compactDate(listing.last_seen_at)}</div></td>
             <td data-label="Actions">
               <div class="actions-cell">
                 <button class="status-button" data-detail="${listing.id}" type="button">Details</button>
@@ -590,6 +628,9 @@ function renderDeals() {
                 <span>${money(priceFor(deal), deal.price_raw ?? "n/a")}</span>
               </div>
               <div class="listing-meta">${escapeHtml(deal.location_raw ?? "n/a")} · ${scoreText} · ${confText}${deal.generation ? ` · ${escapeHtml(deal.generation.code)} generation` : ""}</div>
+              <div class="listing-meta">${escapeHtml(vehicleLabel(deal))} · ${formatMiles(getAttrs(deal).mileage)}</div>
+              ${qualificationHtml(deal)}
+              ${detailRefreshHtml(deal)}
               <div class="tag-list">
                 <span class="tag ${display.tone === "good" ? "" : display.tone === "caution" ? "alert" : ""}">${escapeHtml(display.label)}${display.confirmed ? " · confirmed" : ""}</span>
               </div>
@@ -650,6 +691,9 @@ function listingCard(listing, source) {
           <span>${money(priceFor(listing), listing.price_raw ?? listing.formattedPrice ?? "n/a")}</span>
         </div>
         <div class="listing-meta">${escapeHtml(listing.location_raw ?? listing.locationText ?? "n/a")}</div>
+        <div class="listing-meta">${escapeHtml(vehicleLabel(listing))} · ${formatMiles(getAttrs(listing).mileage ?? listing.mileage)}</div>
+        ${qualificationHtml(listing)}
+        ${detailRefreshHtml(listing)}
         <div class="profile-actions">
           ${listing.status ? statusPill(listing.status) : ""}
           <button class="status-button" data-${source === "facebook" ? "facebook-detail" : "detail"}="${source === "facebook" ? sourceIdFor(listing) : listing.id}" type="button">Details</button>
@@ -723,7 +767,7 @@ function renderDetail(payload) {
       <button class="detail-close" type="button" aria-label="Close listing details" title="Close">×</button>
     </div>
     <div class="detail-hero">
-      ${urls[0] ? `<img id="detailHeroImage" class="detail-image" src="${escapeHtml(urls[0])}" alt="" referrerpolicy="no-referrer" />` : `<div class="detail-image thumb-placeholder">No image</div>`}
+      ${urls[0] ? `<img id="detailHeroImage" class="detail-image" src="${escapeHtml(urls.includes(payload.selectedImageUrl) ? payload.selectedImageUrl : urls[0])}" alt="" referrerpolicy="no-referrer" />` : `<div class="detail-image thumb-placeholder">No image</div>`}
       ${urls.length > 1 ? `<div class="detail-thumbs">${urls.slice(1, 7).map((url) => `<button class="detail-thumb" data-detail-thumb="${escapeHtml(url)}" type="button"><img src="${escapeHtml(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" /></button>`).join("")}${urls.length > 7 ? `<span class="listing-meta">+${urls.length - 7} more</span>` : ""}</div>` : ""}
       <div>
         <h2>${escapeHtml(titleFor(item))}</h2>
@@ -735,8 +779,15 @@ function renderDetail(payload) {
         ${item.id && item.status ? `<button class="status-button" data-delete-listing="${escapeHtml(item.id)}" type="button">Delete listing</button>` : ""}
         ${payload.generation ? `<span class="tag">${escapeHtml(payload.generation.code)} generation</span>` : ""}
         ${item.url ? `<a class="secondary-button" href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">Open</a>` : ""}
+        ${item.id && item.status ? `<button class="status-button" data-refresh-detail="${escapeHtml(item.id)}" type="button"${payload.detailRequest?.loading ? " disabled" : ""}>${payload.detailRequest?.error ? "Retry details" : "Refresh details"}</button><button class="status-button" data-load-photos="${escapeHtml(item.id)}" type="button"${payload.detailRequest?.loading ? " disabled" : ""}>Load photos</button>` : ""}
       </div>
     </div>
+    <section class="detail-section">
+      ${qualificationHtml(payload)}
+      ${detailRefreshHtml(payload)}
+      ${payload.detailRequest?.loading ? `<p class="muted small" role="status">${payload.detailRequest.fetchPhotos ? "Loading photos from Facebook…" : "Checking Facebook details…"} Saved data is shown below.</p>` : ""}
+      ${payload.detailRequest?.error ? `<p class="tag alert" role="status">${escapeHtml(payload.detailRequest.error)} Saved data is still shown. Retry details or load photos when ready.</p>` : ""}
+    </section>
     <section class="detail-section">
       <h3>Description</h3>
       <p>${escapeHtml(item.description_raw ?? item.description ?? "No description captured yet.")}</p>
@@ -744,7 +795,7 @@ function renderDetail(payload) {
     <section class="detail-section">
       <h3>Parsed Attributes</h3>
       <div class="kv-grid">
-        ${Object.entries(attrs).map(([key, value]) => `<div class="kv"><span>${escapeHtml(key)}</span><strong>${escapeHtml(value)}</strong></div>`).join("") || `<p class="muted">No attributes parsed.</p>`}
+        ${Object.entries(attrs).map(([key, value]) => `<div class="kv"><span>${escapeHtml(key)}</span><strong>${escapeHtml(key === "mileage" ? formatMiles(value) : attributeValue(value))}</strong></div>`).join("") || `<p class="muted">No attributes parsed.</p>`}
       </div>
     </section>
     <section class="detail-section">
@@ -757,11 +808,11 @@ function renderDetail(payload) {
     <section class="detail-section">
       <h3>Auction comps (BaT / Cars &amp; Bids)</h3>
       ${matchLabel ? `<div class="listing-meta">${escapeHtml(matchLabel)}</div>` : ""}
-      ${payload.compLoading ? `<p class="muted small">Finding completed auctions for this model and year range…</p>` : ""}
-      ${payload.compError ? `<p class="tag alert">${escapeHtml(payload.compError)}</p>` : ""}
+      ${payload.compsRequest?.loading ? `<p class="muted small">Finding completed auctions for this model and year range…</p>` : ""}
+      ${payload.compsRequest?.error ? `<p class="tag alert">${escapeHtml(payload.compsRequest.error)}</p>` : ""}
       ${chartHtml}
       ${verdict ? `<div class="run-row"><strong>${escapeHtml(verdict)}</strong></div>` : ""}
-      ${compMedian !== null ? `<div class="run-row"><strong>${money(payload.compMedianSoldPrice ?? compMedian)}</strong><span class="run-meta">same-model, similar-year median · ${comps.length} sales</span></div>` : !payload.compLoading ? `<p class="muted">No completed auction comps found yet. You can retry the fetch or add a sale below.</p>` : ""}
+      ${compMedian !== null ? `<div class="run-row"><strong>${money(payload.compMedianSoldPrice ?? compMedian)}</strong><span class="run-meta">same-model, similar-year median · ${comps.length} sales</span></div>` : !payload.compsRequest?.loading ? `<p class="muted">No completed auction comps found yet. You can retry the fetch or add a sale below.</p>` : ""}
       ${similarMileageComps.length ? `<div class="run-row"><strong>${money(payload.similarMileageMedian)}</strong><span class="run-meta">similar mileage · ${similarMileageComps.length} sale${similarMileageComps.length === 1 ? "" : "s"}${payload.mileageWindow ? ` · ${formatMiles(payload.mileageWindow.from)}–${formatMiles(payload.mileageWindow.to)}` : ""}</span></div>` : listingMileage && comps.length ? `<p class="muted small">No saved auction sales fall near this listing’s ${formatMiles(Number(listingMileage))} mileage yet.</p>` : ""}
       <div class="run-stack">
         ${comps.map((comp) => `
@@ -782,7 +833,7 @@ function renderDetail(payload) {
       <div class="comp-form">
         <div class="profile-actions">
           <strong>Pull past results automatically</strong>
-          <button class="secondary-button" data-fetch-comps="${item.id}" type="button">Fetch BaT + C&amp;B</button>
+          <button class="secondary-button" data-fetch-comps="${item.id}" type="button"${payload.compsRequest?.loading ? " disabled" : ""}>Fetch BaT + C&amp;B</button>
         </div>
         <p class="muted small">Fetches sold results for this car's make/model from Bring a Trailer and Cars &amp; Bids. Anything missing can still be pasted manually below.</p>
         <label>
@@ -848,7 +899,8 @@ function renderDetail(payload) {
     </section>
     <footer class="detail-freshness">
       <span>Listed ${item.posted_at ? compactDate(item.posted_at) : "date unavailable"}</span>
-      <span>Last refreshed ${compactDate(item.last_scraped_at ?? item.last_seen_at)}</span>
+      <span>Search observed ${compactDate(item.last_seen_at)}</span>
+      <span>Details fetched ${compactDate(payload.detailRefresh?.lastFetchedAt ?? item.last_scraped_at)}</span>
     </footer>
   `;
 }
@@ -856,6 +908,7 @@ function renderDetail(payload) {
 function closeListingDetail() {
   activeDetailItemId = null;
   detailLoadSequence += 1;
+  state.detailPanel = null;
   const panel = $("#detailPanel");
   panel.classList.remove("has-listing");
   panel.setAttribute("aria-hidden", "true");
@@ -959,14 +1012,9 @@ async function runProfile(profileId, button) {
   try {
     const data = await api(`/profiles/${profileId}/run`, { method: "POST" });
     const found = data.run.resultsFound ?? 0;
-    const diagnostic = data.run.diagnostics;
-    toast(
-      diagnostic?.cursorPlaceholderCount > 0
-        ? `Facebook returned ${diagnostic.cursorPlaceholderCount} listing IDs without card fields; loaded ${data.run.detailPagesOpened ?? 0} details.`
-        : found === 0 && diagnostic
-        ? `No listings parsed (feed edges: ${diagnostic.edgeCount ?? 0}). Check the Facebook response format.`
-        : `Run finished: ${found} results, ${data.run.newItems ?? 0} new, ${data.run.alertsCreated ?? 0} alerts`
-    );
+    toast(data.run.status === "failed"
+      ? `Search failed: ${data.run.errorMessage || "Could not complete search"}`
+      : `Run finished: ${found} results, ${data.run.newItems ?? 0} new, ${data.run.unknownCount ?? 0} unverified, ${data.run.alertsCreated ?? 0} alerts`);
     await Promise.all([loadListings(), loadRuns(), loadDeals(), loadAlerts()]);
   } finally {
     if (button) {
@@ -1002,35 +1050,112 @@ async function updateStatus(itemId, status) {
 async function showListingDetail(itemId) {
   const sequence = ++detailLoadSequence;
   activeDetailItemId = itemId;
-  const data = await api(`/listings/${itemId}`);
-  if (sequence !== detailLoadSequence) return;
-  let compsData = await api(`/listings/${itemId}/comps`).catch(() => ({ comps: [] }));
-  if (sequence !== detailLoadSequence) return;
-  const needsFirstFetch = !(compsData.comps ?? []).length && !attemptedAutomaticCompFetches.has(itemId);
-  const render = (compLoading = false, compError = "") => renderDetail({
-    ...data,
-    ...compsData,
-    comps: compsData.comps ?? [],
-    compGeneration: compsData.generation ?? null,
-    compYearWindow: compsData.yearWindow ?? null,
-    compTrend: compsData.trend ?? null,
-    compLoading,
-    compError
+  const panel = {
+    itemId, sequence,
+    listing: { data: null, loading: true, error: "" },
+    comps: { data: {}, loading: true, error: "" },
+    detail: { loading: false, error: "", fetchPhotos: false }
+  };
+  state.detailPanel = panel;
+  renderListingPanel(panel);
+  try {
+    const data = await api(`/listings/${itemId}`);
+    if (!isCurrentDetailPanel(panel)) return;
+    panel.listing = { data, loading: false, error: "" };
+    renderListingPanel(panel);
+  } catch (error) {
+    if (!isCurrentDetailPanel(panel)) return;
+    panel.listing = { data: null, loading: false, error: error.message };
+    renderListingPanel(panel);
+    return;
+  }
+  await Promise.all([loadListingComps(panel), refreshListingDetails(panel)]);
+}
+
+function isCurrentDetailPanel(panel) {
+  return panel && panel.sequence === detailLoadSequence && activeDetailItemId === panel.itemId;
+}
+
+function renderListingPanel(panel) {
+  if (!isCurrentDetailPanel(panel)) return;
+  if (!panel.listing.data) {
+    const node = $("#detailPanel");
+    node.classList.add("has-listing");
+    node.setAttribute("aria-hidden", "false");
+    node.removeAttribute("inert");
+    document.body.classList.add("detail-open");
+    node.innerHTML = `<div class="detail-panel-header"><span>Listing details</span><button class="detail-close" type="button" aria-label="Close listing details">×</button></div><p class="detail-section" role="status">${panel.listing.loading ? "Loading saved listing…" : `Saved listing could not load: ${escapeHtml(panel.listing.error)}`}</p>`;
+    return;
+  }
+  const comps = panel.comps.data;
+  renderDetail({
+    ...comps,
+    ...panel.listing.data,
+    comps: comps.comps ?? [],
+    compGeneration: comps.generation ?? null,
+    compYearWindow: comps.yearWindow ?? null,
+    compTrend: comps.trend ?? null,
+    compsRequest: panel.comps,
+    detailRequest: panel.detail,
+    selectedImageUrl: panel.selectedImageUrl
   });
-  render(needsFirstFetch);
-  if (needsFirstFetch) {
-    attemptedAutomaticCompFetches.add(itemId);
-    try {
-      const fetched = await api(`/listings/${itemId}/comps/fetch`, { method: "POST" });
-      compsData = await api(`/listings/${itemId}/comps`).catch(() => ({ comps: fetched.comps ?? [] }));
-      if (sequence === detailLoadSequence && activeDetailItemId === itemId) render(false);
-    } catch (error) {
-      if (sequence === detailLoadSequence && activeDetailItemId === itemId) render(false, `Automatic auction lookup failed: ${error.message}`);
+}
+
+async function loadListingComps(panel, fetch = false) {
+  if (!isCurrentDetailPanel(panel)) return;
+  panel.comps.loading = true;
+  panel.comps.error = "";
+  renderListingPanel(panel);
+  try {
+    if (!fetch) {
+      const data = await api(`/listings/${panel.itemId}/comps`);
+      if (!isCurrentDetailPanel(panel)) return;
+      panel.comps.data = data;
+    }
+    if (fetch || (!(panel.comps.data.comps ?? []).length && !attemptedAutomaticCompFetches.has(panel.itemId))) {
+      attemptedAutomaticCompFetches.add(panel.itemId);
+      const fetched = await api(`/listings/${panel.itemId}/comps/fetch`, { method: "POST" });
+      if (!isCurrentDetailPanel(panel)) return;
+      panel.comps.data = { ...panel.comps.data, comps: fetched.comps ?? panel.comps.data.comps ?? [] };
+      const data = await api(`/listings/${panel.itemId}/comps`);
+      if (!isCurrentDetailPanel(panel)) return;
+      panel.comps.data = data;
+    }
+  } catch (error) {
+    if (!isCurrentDetailPanel(panel)) return;
+    panel.comps.error = `Auction lookup failed: ${error.message}`;
+  } finally {
+    if (isCurrentDetailPanel(panel)) {
+      panel.comps.loading = false;
+      renderListingPanel(panel);
+    }
+  }
+}
+
+async function refreshListingDetails(panel, options = { fetchPhotos: false }) {
+  if (!isCurrentDetailPanel(panel) || panel.detail.loading || !panel.listing.data) return;
+  panel.detail = { loading: true, error: "", fetchPhotos: options.fetchPhotos === true };
+  renderListingPanel(panel);
+  try {
+    const result = await api(`/listings/${panel.itemId}/refresh`, { method: "POST", body: JSON.stringify(options) });
+    if (!isCurrentDetailPanel(panel)) return;
+    const cached = panel.listing.data;
+    const listing = result.listing;
+    const images = [...new Set([...getImageUrls(listing.item), ...getImageUrls(cached.item)])];
+    panel.listing.data = { ...listing, item: { ...listing.item, image_urls: images } };
+  } catch (error) {
+    if (!isCurrentDetailPanel(panel)) return;
+    panel.detail.error = `Facebook detail refresh failed: ${error.message}`;
+  } finally {
+    if (isCurrentDetailPanel(panel)) {
+      panel.detail.loading = false;
+      renderListingPanel(panel);
     }
   }
 }
 
 async function saveComp(itemId) {
+  const panel = state.detailPanel;
   const body = {
     source: $("#compSource")?.value ?? "bat",
     title: $("#compTitle")?.value ?? "",
@@ -1045,35 +1170,29 @@ async function saveComp(itemId) {
     return;
   }
   await api(`/listings/${itemId}/comps`, { method: "POST", body: JSON.stringify(body) });
+  if (!isCurrentDetailPanel(panel) || panel.itemId !== itemId) return;
   toast("Comp added");
-  await showListingDetail(itemId);
+  await loadListingComps(panel);
 }
 
 async function removeComp(compId, itemId) {
+  const panel = state.detailPanel;
   await api(`/comps/${compId}`, { method: "DELETE" });
+  if (!isCurrentDetailPanel(panel) || panel.itemId !== itemId) return;
   toast("Comp removed");
-  await showListingDetail(itemId);
+  await loadListingComps(panel);
 }
 
 async function fetchComps(itemId, button) {
+  const panel = state.detailPanel;
+  if (!isCurrentDetailPanel(panel) || panel.itemId !== itemId || panel.comps.loading) return;
   const originalLabel = button?.textContent;
   if (button) {
     button.disabled = true;
     button.textContent = "Fetching...";
   }
   try {
-    const data = await api(`/listings/${itemId}/comps/fetch`, { method: "POST" });
-    if (data.inserted > 0) {
-      toast(`Added ${data.inserted} new comps`);
-    } else if (data.fetched > 0) {
-      toast("Comps already saved");
-    } else {
-      const reasons = [data.diagnostics?.bat?.reason, data.diagnostics?.carsAndBids?.reason].filter(Boolean);
-      toast(reasons.length ? `No comps found: ${reasons.join("; ")}` : "No comps found for this car");
-    }
-    await showListingDetail(itemId);
-  } catch (error) {
-    toast(error.message);
+    await loadListingComps(panel, true);
   } finally {
     if (button) {
       button.disabled = false;
@@ -1083,7 +1202,11 @@ async function fetchComps(itemId, button) {
 }
 
 async function showFacebookDetail(listingId) {
+  const sequence = ++detailLoadSequence;
+  activeDetailItemId = `facebook:${listingId}`;
+  state.detailPanel = null;
   const data = await api(`/facebook/listings/${listingId}`);
+  if (sequence !== detailLoadSequence || activeDetailItemId !== `facebook:${listingId}`) return;
   renderDetail(data);
 }
 
@@ -1371,6 +1494,12 @@ function bindEvents() {
         toast("Profile deleted");
       }
       if (target.dataset.detail) await showListingDetail(target.dataset.detail);
+      if (target.dataset.refreshDetail && state.detailPanel?.itemId === target.dataset.refreshDetail) {
+        await refreshListingDetails(state.detailPanel, { force: true, fetchPhotos: false });
+      }
+      if (target.dataset.loadPhotos && state.detailPanel?.itemId === target.dataset.loadPhotos) {
+        await refreshListingDetails(state.detailPanel, { force: true, fetchPhotos: true });
+      }
       if (target.dataset.saveComp) await saveComp(target.dataset.saveComp);
       if (target.dataset.compTrans) {
         compTransFilter = target.dataset.compTrans;
@@ -1388,6 +1517,7 @@ function bindEvents() {
       if (target.dataset.detailThumb) {
         const hero = $("#detailHeroImage");
         if (hero) hero.src = target.dataset.detailThumb;
+        if (state.detailPanel) state.detailPanel.selectedImageUrl = target.dataset.detailThumb;
         return;
       }
       if (target.dataset.facebookDetail) await showFacebookDetail(target.dataset.facebookDetail);

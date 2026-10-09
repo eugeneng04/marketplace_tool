@@ -9,7 +9,6 @@ import { URL } from "node:url";
 import { assertConfig, loadConfig } from "./config.js";
 import {
   createComp,
-  computeMarketStats,
   createDb,
   createProfile,
   createSearchGroup,
@@ -30,9 +29,6 @@ import {
   listSearchGroups,
   listRuns,
   markDealAlertRead,
-  saveParsedItem,
-  updateListingDetail,
-  upsertDealScore,
   advanceSearchGroup,
   migrate,
   recoverInterruptedSearchRuns,
@@ -47,10 +43,9 @@ import {
 } from "./db.js";
 import { compMedian, priceTrend, similarMileageComps, validateCompInput } from "./comps.js";
 import { compMatchesModel, fetchBatCompsForListing, fetchCandbCompsForListing, generationFor, inferMakeModel, listingYear, matchCompsToListing, yearWindowFor } from "./auctionComps.js";
-import { createFacebookConnector, createFacebookGraphqlClient, detailToRawSourceItem } from "./facebookConnector.js";
+import { createFacebookConnector, createFacebookGraphqlClient } from "./facebookConnector.js";
 import { runProfileSync } from "./syncEngine.js";
-import { scoreListing } from "./dealScoring.js";
-import { parseVehicleListing } from "./vehicleParser.js";
+import { createListingRefresh } from "./listingRefresh.js";
 import { parseJsonBody, toInt } from "./utils.js";
 import { findGeneration } from "./vehicleGenerations.js";
 
@@ -213,8 +208,7 @@ function parseFacebookSearchInput(body) {
   };
 }
 
-export async function createApp() {
-  const config = loadConfig();
+export async function createApp({ config = loadConfig(), connector: suppliedConnector } = {}) {
   assertConfig(config);
 
   const db = createDb(config.databaseUrl);
@@ -225,7 +219,8 @@ export async function createApp() {
   const remoteCollector = createRemoteCollector({store:createCollectorStore(db)});
   const localFacebookClient = buildFacebookGraphqlClient(config);
   const facebookGraphqlClient = remoteCollector.routeClient(localFacebookClient);
-  const connector = buildConnector(config, facebookGraphqlClient);
+  const connector = suppliedConnector ?? buildConnector(config, facebookGraphqlClient);
+  const refreshListing = createListingRefresh({ db, connector, preferManualTransmission: config.preferManualTransmission });
   const browserDiagnostic = createBrowserDiagnostic({config});
   let searchInspection = {state:'idle'};
   let lastInspectionStarted = 0;
@@ -601,30 +596,10 @@ export async function createApp() {
 
       if (pathname.startsWith("/listings/") && pathname.endsWith("/refresh") && req.method === "POST") {
         const itemId = pathname.slice("/listings/".length, -"/refresh".length);
-        const current = await getListingById(db, itemId);
-        if (!current) return sendJson(res, 404, { error: "Listing not found" });
-        if (!current.item.source_item_id) return sendJson(res, 400, { error: "This listing has no Marketplace source id." });
-        const detail = await facebookGraphqlClient.getListingDetail(current.item.source_item_id);
-        const rawItem = detailToRawSourceItem(detail, {
-          sourceItemId: current.item.source_item_id,
-          listingUrl: current.item.url,
-          titleRaw: current.item.title_raw,
-          priceRaw: current.item.price_raw,
-          locationRaw: current.item.location_raw,
-          rawCardText: current.item.description_raw
-        });
-        await updateListingDetail(db, itemId, rawItem);
-        const parsed = parseVehicleListing(rawItem);
-        await saveParsedItem(db, itemId, parsed);
-        const marketStats = await computeMarketStats(db, {
-          category: current.item.category,
-          excludeItemId: itemId,
-          make: parsed.attributes.make ?? null,
-          model: parsed.attributes.model ?? null,
-          locationRegion: rawItem.locationRaw ?? current.item.location_region
-        });
-        await upsertDealScore(db, itemId, scoreListing({ itemPrice: current.item.current_price, parsed, marketStats, preferManualTransmission: config.preferManualTransmission }));
-        return sendJson(res, 200, { listing: await getListingById(db, itemId) });
+        const body = parseJsonBody(await readBody(req));
+        const result = await refreshListing(itemId, { force: body.force === true, fetchPhotos: body.fetchPhotos === true });
+        if (!result) return sendJson(res, 404, { error: "Listing not found" });
+        return sendJson(res, 200, result);
       }
 
       if (pathname === "/deals" && req.method === "GET") {
@@ -797,6 +772,7 @@ export async function createApp() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unexpected error";
       if (error?.code === "COLLECTION_BUSY") return sendJson(res, 409, { error: message });
+      if (error?.status === 400) return sendJson(res, 400, { error: message });
       if (error?.code === "FACEBOOK_COOLDOWN") {
         res.setHeader("Retry-After", Math.max(1, Math.ceil((error.retryAt - Date.now()) / 1000)));
         return sendJson(res, 429, { error: message, retryAt: new Date(error.retryAt).toISOString() });

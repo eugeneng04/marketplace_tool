@@ -48,10 +48,17 @@ Local development retains the internal scheduler by default.
 - `FB_MAX_REQUESTS_PER_MINUTE` is enforced across all Facebook clients in one
   worker process, including token-page, search, location, detail, and photo
   requests. Multiple worker processes do not share this in-memory limit.
-- A search run fetches missing listing details with one request per card.
-  Gallery-only requests are reserved for explicit listing refreshes so missing
-  photos do not double the request count for every listing in a run.
-- Direct Render collection continues past one narrowly recognized listing
+- A search run saves Marketplace cards and returns without per-listing detail
+  requests. It retains supplied vehicle fields and cached detail evidence.
+  Missing filter evidence remains unverified; confirmed contradictions are
+  mismatches. Only a current match with fresh, complete details can create an
+  alert under the existing alert rules.
+- Opening a saved listing renders saved data first, then conditionally refreshes
+  missing, stale, or incomplete details. Fresh details reuse the cache.
+  Automatic enrichment skips the separate gallery request. **Load photos**
+  requests photo enrichment explicitly. Concurrent refreshes of one listing
+  share a request within one worker process.
+- Direct GraphQL detail requests recognize one narrow unavailable-listing
   rejection. The listing-detail document must return exactly one error object
   with the message `A server error field_exception occured. Check server logs for details.`
   The object can contain only `message`, `code`, `type`, and `path`. Its `code`
@@ -59,8 +66,7 @@ Local development retains the internal scheduler by default.
   `error`. This rejection preserves the loaded Facebook session and discards
   any returned partial target. It starts no photo request, retry, or fallback.
   Unknown signatures, authentication failures, throttling, and transport errors
-  stop later detail requests. A fatal error retains earlier rejected listing
-  IDs in the bounded run error.
+  remain failures. A failed click refresh preserves the last saved listing data.
 - `getListingDetail` separately accepts the reviewed optional `delivery_data`
   field failure when the response has exactly one error with only `message`,
   `path`, `severity`, `mids`, and `debug_link`. The message must match the field
@@ -82,14 +88,11 @@ Local development retains the internal scheduler by default.
   It does not retry solely for the unused field. Requested photo enrichment
   remains strict. Search, location, photo, and generic GraphQL requests cannot
   use this recovery.
-- A run with rejected details remains `failed` and creates no alerts. Matching
-  cards and successful details still persist. An incomplete refresh marker makes
-  the affected item eligible for detail on a later run, even when saving its
-  card price removes a price mismatch. The snapshot transaction commits the
-  marker with the card price, so a later parser failure preserves the retry.
-  Excluded cached items retain their prior
-  refresh trigger because their card data does not persist. Hidden, rejected,
-  and sold items remain excluded from detail refreshes.
+- Card-only search does not mark details complete or clear an existing
+  incomplete marker. A later click can retry the affected listing. Search and
+  detail observation writes preserve cached fields and update numeric price,
+  changed-price history, snapshots, parsed evidence, and scoring together.
+  Hidden, rejected, and sold workflow states remain unchanged.
 - Before testing Facebook, check authenticated `GET /collector/status` to
   identify the execution source. Enabled computer mode uses the collector.
   Collector errors that lose their listing-specific error identity remain fatal.
@@ -103,7 +106,7 @@ Local development retains the internal scheduler by default.
   credential denylist and strings outside that syntax are excluded. The check does not prove
   that a name belongs to Facebook's schema. The diagnostic includes no raw error
   message, unknown error-field values, or response.
-  Local fixtures prove the continuation rule. They do not establish that the
+  Local fixtures prove the decoder rules. They do not establish that the
   live upstream error has the recognized shape or that a saved Render run works.
   The diagnostic also reports enumerated severity, retry and reauthentication
   flags, array shape and count for `locations` and `mids`, and non-null presence

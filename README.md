@@ -127,6 +127,7 @@ Open `http://localhost:5173`. The UI defaults to `http://localhost:10000` for th
 - `GET /runs?profileId=<id>&limit=50`
 - `GET /listings?status=&make=&model=&transmission=&minPrice=&maxPrice=&limit=&offset=`
 - `GET /listings/:id`
+- `POST /listings/:id/refresh` refresh missing, stale, or incomplete Facebook details; `force` and `fetchPhotos` default to `false`, and the response contains `listing` and `cached`
 - `PATCH /listings/:id/status`
 - `GET /deals?limit=30` ranked deals feed (score, confidence, verdict, reasons)
 - `GET /alerts?limit=30&unreadOnly=true&profileId=<id>` in-app deal alerts
@@ -140,7 +141,11 @@ Profiles accept per-search alert rules (`alertMinScore` 0-100, `alertMinConfiden
 
 Search groups let related queries (for example, BRZ and FR-S) stay as separate Marketplace searches while sharing a manual or interval-based schedule. Locally, the worker checks due groups every 30 seconds. The free Render blueprint sets `SCHEDULER_ENABLED=false`; the included hourly GitHub Actions workflow calls `POST /sync/due` with a separate `SCHEDULER_TOKEN`, so Render and Neon can become idle between runs. See `docs/implementation/render-start.md` for account setup, secrets, and free-tier limits.
 
-Saved vehicle searches also accept optional detail-based filters for transmission, year range, maximum mileage, clean-title mentions, and modification mentions. Those filters run against listing text/details after capture; missing claims are treated as not matching when a filter is required.
+Saved searches save the initial Marketplace cards without fetching every listing's details. Titles, prices, locations, thumbnails, mileage, and vehicle attributes appear when supplied by the search. Previously fetched descriptions, vehicle data, and photos remain available.
+
+Vehicle filters for transmission, year range, maximum mileage, clean-title mentions, and modification mentions use the available evidence. A contradiction is a mismatch. Missing required evidence is unverified, so the candidate remains visible without claiming that it passed every filter. Qualification is calculated for each linked saved search using its current filters. Unverified candidates and listings with missing, stale, or incomplete details do not create deal alerts.
+
+Opening a saved listing displays its saved data before loading missing or stale Facebook details and auction comparisons. Fresh details reuse the cache. Automatic detail loading does not request a separate photo gallery; **Load photos** requests it explicitly. **Reload saved** reloads the database view; use **Run** or **Run all saved** to search Facebook.
 
 Direct Facebook search example:
 
