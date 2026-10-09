@@ -78,9 +78,10 @@ Local development retains the internal scheduler by default.
   and bounded schema field names. `unknownFields` includes at most 10 unknown
   error keys. `path` preserves at most 16 segments, with numeric indexes replaced
   by `[index]` and rejected segments replaced by `[other]`. Schema names must
-  match `^[a-z_]{1,64}$` after session-secret removal. Credential field names,
-  arbitrary strings, and identifier values are excluded. These names describe
-  GraphQL structure. The diagnostic includes no raw error message or response.
+  match `^[a-z_]{1,64}$` after session-secret removal. Names that match the
+  credential denylist and strings outside that syntax are excluded. The check does not prove
+  that a name belongs to Facebook's schema. The diagnostic includes no raw error
+  message, unknown error-field values, or response.
   Local fixtures prove the continuation rule. They do not establish that the
   live upstream error has the recognized shape or that a saved Render run works.
   The diagnostic also reports enumerated severity, retry and reauthentication
