@@ -303,7 +303,7 @@ test("detail diagnostics report fixed metadata and target presence without priva
   });
   response.errors = [{ message: fieldException, severity: "CRITICAL", is_transient: false,
     requires_reauth: null, allow_user_retry: true, api_error_code: "private-api-code",
-    summary: "private-summary", description: "private-description", locations: [{ line: "private-line" }],
+    summary: "private-summary", description: "private-description", locations: [{ line: "private-line" }], mids: ["private-mid"],
     path: ["viewer", "marketplace_product_details_page", "target", "vehicle_transmission_type", "private-leaf"] }];
   const scenario = setup(t, { rejected: { "102": response } });
   await assert.rejects(scenario.client.getListingDetail("102"), error => {
@@ -313,6 +313,7 @@ test("detail diagnostics report fixed metadata and target presence without priva
     assert.equal(metadata.severity, "CRITICAL");
     assert.deepEqual(metadata.flags, { is_transient: false, allow_user_retry: true, requires_reauth: null });
     assert.equal(metadata.unknownFieldCount, 0);
+    assert.deepEqual(metadata.arrays, { locations: { shape: "array", count: 1 }, mids: { shape: "array", count: 1 } });
     for (const field of ["locations", "api_error_code", "summary", "description"]) assert.ok(metadata.knownFields.includes(field));
     assert.deepEqual(metadata.path, ["viewer", "marketplace_product_details_page", "target", "vehicle_transmission_type", "[other]"]);
     assert.equal(diagnostic.targetFields.id, true);

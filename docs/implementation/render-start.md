@@ -78,6 +78,10 @@ Local development retains the internal scheduler by default.
   and allowlisted path fields. It includes no raw error message or response.
   Local fixtures prove the continuation rule. They do not establish that the
   live upstream error has the recognized shape or that a saved Render run works.
+  The diagnostic also reports enumerated severity, retry and reauthentication
+  flags, array shape and count for `locations` and `mids`, and non-null presence
+  for fixed listing fields. Arbitrary metadata values and listing values remain
+  excluded. Field presence does not prove that partial detail data is usable.
   Capture this safe diagnostic, then verify the saved run separately after an
   authorized deployment.
 - HTTP 429 and Facebook GraphQL rate-limit errors (including code 1675004 in

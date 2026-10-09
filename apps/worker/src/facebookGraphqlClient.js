@@ -687,21 +687,45 @@ export class ListingDetailUnavailableError extends Error {
 
 function inspectListingDetailFailure(data, session) {
   const safe = sanitizeFacebookEvidence(data.errors, session);
-  const errorFields = ["message", "code", "type", "path", "severity", "extensions", "debug_info"];
+  const flagFields = ["is_transient", "allow_user_retry", "requires_reauth"];
+  const errorFields = ["message", "code", "type", "path", "severity", "extensions", "debug_info",
+    "locations", "mids", "api_error_code", "summary", "description", ...flagFields];
+  const target = data.data?.viewer?.marketplace_product_details_page?.target;
+  const targetFields = [
+    "id", "marketplace_listing_title", "redacted_description", "listing_price",
+    "location", "location_text", "primary_listing_photo", "listing_photos",
+    "marketplace_listing_seller", "creation_time", "share_uri", "is_pending", "is_sold",
+    "condition", "attribute_data", "vehicle_make_display_name", "vehicle_model_display_name",
+    "vehicle_trim_display_name", "vehicle_transmission_type", "vehicle_odometer_data",
+    "vehicle_exterior_color", "vehicle_interior_color", "vehicle_fuel_type",
+    "vehicle_number_of_owners", "vehicle_is_paid_off", "vehicle_seller_type"
+  ];
   const pathFields = new Set([
-    "data", "viewer", "marketplace_product_details_page", "target", "id",
-    "marketplace_listing_title", "redacted_description", "text", "listing_price",
-    "formatted_amount", "amount", "listing_photos", "primary_listing_photo", "image", "uri"
+    "data", "viewer", "marketplace_product_details_page", "target",
+    ...targetFields, "text", "formatted_amount", "amount", "currency", "image", "uri",
+    "reverse_geocode", "city_page", "display_name", "name", "unit", "value"
   ]);
   return {
     operation: "listing_detail",
-    targetPresent: data.data?.viewer?.marketplace_product_details_page?.target != null,
+    targetPresent: target != null,
+    targetFields: Object.fromEntries(targetFields.map(field => [field, target?.[field] != null])),
     topLevelError: Object.hasOwn(data, "error"),
     errorCount: Array.isArray(data.errors) ? data.errors.length : null,
     errors: Array.isArray(safe) ? safe.slice(0, 3).map((error, index) => ({
       knownFields: errorFields.filter(field => Object.hasOwn(data.errors[index] ?? {}, field)),
       unknownFieldCount: Object.keys(data.errors[index] ?? {}).filter(field => !errorFields.includes(field)).length,
       knownMessage: data.errors[index]?.message === LISTING_FIELD_EXCEPTION_MESSAGE,
+      severity: data.errors[index]?.severity == null ? null
+        : ["WARNING", "ERROR", "CRITICAL", "FATAL"].includes(data.errors[index].severity) ? data.errors[index].severity : "[other]",
+      arrays: Object.fromEntries(["locations", "mids"].filter(field => Object.hasOwn(data.errors[index] ?? {}, field)).map(field => {
+        const value = data.errors[index][field];
+        return [field, { shape: Array.isArray(value) ? "array" : value == null ? "null" : typeof value,
+          count: Array.isArray(value) ? value.length : null }];
+      })),
+      flags: Object.fromEntries(flagFields.filter(field => Object.hasOwn(data.errors[index] ?? {}, field)).map(field => {
+        const value = data.errors[index][field];
+        return [field, value == null || typeof value === "boolean" ? value : typeof value];
+      })),
       extensionsPresent: error?.extensions != null,
       codePresent: error?.code != null || error?.extensions?.code != null,
       code: /^[0-9]{1,20}$/.test(String(error?.code ?? error?.extensions?.code))
