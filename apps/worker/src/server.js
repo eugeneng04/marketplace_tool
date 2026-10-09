@@ -1,6 +1,7 @@
 import {createCollectorStore, createRemoteCollector} from './remoteCollector.js';
 import { configureFacebookCooldown, scheduleFacebookRequest } from "./facebookRequestLimiter.js";
 import { createBrowserDiagnostic } from "./facebookBrowserDiagnostic.js";
+import { inspectListingHtml } from "./facebookListingHtmlDiagnostic.js";
 import { inspectSearchPayload } from "./facebookSearchInspection.js";
 import { readFile } from "node:fs/promises";
 import { createDueSearchRunner } from "./scheduler.js";
@@ -362,6 +363,10 @@ export async function createApp({ config = loadConfig(), connector: suppliedConn
           runs.push({ profileId: profile.id, ...(await runProfileSync({ db, connector, profile: fullProfile, preferManualTransmission: config.preferManualTransmission })) });
         }
         return sendJson(res, 200, { count: runs.length, runs });
+      }
+      if (pathname === '/facebook/listing-html-test' && req.method === 'POST') {
+        const body = parseJsonBody(await readBody(req, 1024));
+        return sendJson(res, 200, await inspectListingHtml(body.listingId, { requestsPerMinute: config.facebookMaxRequestsPerMinute }));
       }
       if (pathname === "/facebook/browser-test" && req.method === "GET") {
         return sendJson(res, 200, browserDiagnostic.status());

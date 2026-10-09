@@ -341,6 +341,12 @@ test("PostgreSQL listing observations", {
         return { status: response.status, body: await response.json() };
       };
       try {
+        const unauthenticatedHtml = await fetch(`${origin}/facebook/listing-html-test`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ listingId: '123' })
+        });
+        assert.equal(unauthenticatedHtml.status, 401);
+        const invalidHtml = await request('/facebook/listing-html-test', { listingId: '../' });
+        assert.equal(invalidHtml.status, 400);
         const path = `/listings/${fixture.saved.itemId}/refresh`;
         const initial = await request(path, {});
         assert.equal(initial.status, 200);
