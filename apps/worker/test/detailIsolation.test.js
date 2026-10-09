@@ -27,7 +27,7 @@ function detailPayload(id) {
   return { data: { viewer: { marketplace_product_details_page: { target: listing(id) } } } };
 }
 
-function setup(t, { ids = ["101", "102", "103"], rejected = { "102": { errors: [{ message: fieldException }] } }, refreshStates = new Map(), operations = {} } = {}) {
+function setup(t, { ids = ["101", "102", "103"], rejected = { "102": { errors: [{ message: fieldException }] } }, refreshStates = new Map(), operations = {}, parserFailures = 0 } = {}) {
   const requests = [];
   let tokenPages = 0;
   t.mock.method(globalThis, "fetch", async (url, options) => {
@@ -66,11 +66,17 @@ function setup(t, { ids = ["101", "102", "103"], rejected = { "102": { errors: [
         ...prior, status: prior?.status ?? "new", title_raw: args.rawItem.titleRaw,
         description_raw: args.rawItem.descriptionRaw, image_urls: args.rawItem.imageUrls,
         price_raw: args.rawItem.priceRaw, current_price: args.parsedPrice,
-        last_scraped_at: args.rawItem.sourceMetadata.detailFetched ? new Date().toISOString() : prior?.last_scraped_at
+        last_scraped_at: args.rawItem.sourceMetadata.detailFetched ? new Date().toISOString() : prior?.last_scraped_at,
+        parsed_attributes_json: { ...prior?.parsed_attributes_json,
+          ...(args.detailRefresh ? { detailRefresh: args.detailRefresh } : {}) }
       });
       return { itemId: id, isNew: !prior };
     },
     async saveParsedItem(_db, id, parsed) {
+      if (parserFailures > 0) {
+        parserFailures -= 1;
+        throw new Error("Synthetic parser failure");
+      }
       parsedItems.set(id, parsed);
       refreshStates.get(id).parsed_attributes_json = parsed.attributes;
     },
@@ -216,6 +222,27 @@ test("an incomplete cached refresh retries after persistence removes its price m
   assert.deepEqual(scenario.requests.map(request => request.id), ["102", "102"]);
   assert.equal(scenario.parsedItems.get("102").attributes.detailRefresh.status, "complete");
   assert.equal(shouldFetchDetail(scenario.refreshStates.get("102"), 24), false);
+});
+
+test("a parser failure after the snapshot still retries rejected cached details", async t => {
+  const scenario = setup(t, {
+    ids: ["102"], parserFailures: 1,
+    refreshStates: new Map([["102", cachedState({
+      parsed_attributes_json: { detailRefresh: { status: "complete" } }
+    })]])
+  });
+  await assert.rejects(scenario.run(), /Synthetic parser failure/);
+  const incomplete = scenario.refreshStates.get("102");
+  assert.equal(incomplete.current_price, 12000);
+  assert.equal(incomplete.price_raw, "$12,000");
+  assert.equal(incomplete.parsed_attributes_json.detailRefresh.status, "incomplete");
+  assert.equal(shouldFetchDetail(incomplete, 24), true);
+  delete scenario.rejected["102"];
+  const next = await scenario.run();
+  assert.equal(next.status, "completed");
+  assert.equal(next.detailPagesOpened, 1);
+  assert.deepEqual(scenario.requests.map(request => request.id), ["102", "102"]);
+  assert.equal(scenario.parsedItems.get("102").attributes.detailRefresh.status, "complete");
 });
 
 test("excluded cached failures retain the original refresh trigger without saving excluded items", async t => {
