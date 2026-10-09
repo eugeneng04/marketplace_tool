@@ -64,7 +64,9 @@ Local development retains the internal scheduler by default.
 - A run with rejected details remains `failed` and creates no alerts. Matching
   cards and successful details still persist. An incomplete refresh marker makes
   the affected item eligible for detail on a later run, even when saving its
-  card price removes a price mismatch. Excluded cached items retain their prior
+  card price removes a price mismatch. The snapshot transaction commits the
+  marker with the card price, so a later parser failure preserves the retry.
+  Excluded cached items retain their prior
   refresh trigger because their card data does not persist. Hidden, rejected,
   and sold items remain excluded from detail refreshes.
 - Before testing Facebook, check authenticated `GET /collector/status` to

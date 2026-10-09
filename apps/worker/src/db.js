@@ -722,7 +722,7 @@ export async function listRuns(db, profileId, limit = 50) {
 }
 
 export async function upsertRawItemSnapshot(db, args) {
-  const { profile, runId, rank, rawItem, parsedPrice } = args;
+  const { profile, runId, rank, rawItem, parsedPrice, detailRefresh } = args;
   const client = await db.pool.connect();
   try {
     await client.query("BEGIN");
@@ -832,6 +832,13 @@ export async function upsertRawItemSnapshot(db, args) {
           [createId(), itemId, parsedPrice, rawItem.priceRaw ?? null, now]
         );
       }
+    }
+
+    if (detailRefresh) {
+      await client.query(
+        "UPDATE items SET parsed_attributes_json = jsonb_set(parsed_attributes_json, '{detailRefresh}', $2::jsonb) WHERE id = $1",
+        [itemId, JSON.stringify(detailRefresh)]
+      );
     }
 
     await client.query(

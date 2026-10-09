@@ -251,7 +251,8 @@ async function runProfileSyncUnlocked({ db, connector, profile, preferManualTran
         runId: run.id,
         rank: card.rank,
         rawItem: raw,
-        parsedPrice
+        parsedPrice,
+        detailRefresh
       });
 
       if (upsertResult.isNew) {
