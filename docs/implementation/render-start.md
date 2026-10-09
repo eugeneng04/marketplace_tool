@@ -51,6 +51,33 @@ Local development retains the internal scheduler by default.
 - A search run fetches missing listing details with one request per card.
   Gallery-only requests are reserved for explicit listing refreshes so missing
   photos do not double the request count for every listing in a run.
+- Direct Render collection continues past one narrowly recognized listing
+  rejection. The listing-detail document must return exactly one error object
+  with the message `A server error field_exception occured. Check server logs for details.`
+  The object can contain only `message`, `code`, `type`, and `path`. Its `code`
+  and `type` must be absent or null, and the response cannot contain a top-level
+  `error`. This rejection preserves the loaded Facebook session and discards
+  any returned partial target. It starts no photo request, retry, or fallback.
+  Unknown signatures, authentication failures, throttling, and transport errors
+  stop later detail requests. A fatal error retains earlier rejected listing
+  IDs in the bounded run error.
+- A run with rejected details remains `failed` and creates no alerts. Matching
+  cards and successful details still persist. An incomplete refresh marker makes
+  the affected item eligible for detail on a later run, even when saving its
+  card price removes a price mismatch. Excluded cached items retain their prior
+  refresh trigger because their card data does not persist. Hidden, rejected,
+  and sold items remain excluded from detail refreshes.
+- Before testing Facebook, check authenticated `GET /collector/status` to
+  identify the execution source. Enabled computer mode uses the collector.
+  Collector errors that lose their listing-specific error identity remain fatal.
+  `GET /facebook/listings/{id}` exposes a bounded `detailDiagnostic` on GraphQL
+  rejection through the existing HTTP 500 response. It reports target presence,
+  error count, known field names, unknown field count, numeric codes, type shape,
+  and allowlisted path fields. It includes no raw error message or response.
+  Local fixtures prove the continuation rule. They do not establish that the
+  live upstream error has the recognized shape or that a saved Render run works.
+  Capture this safe diagnostic, then verify the saved run separately after an
+  authorized deployment.
 - HTTP 429 and Facebook GraphQL rate-limit errors (including code 1675004 in
   HTTP 200 responses) stop outgoing requests for five minutes when Facebook
   omits `Retry-After`; an explicit server retry time is honored. The cooldown is stored in PostgreSQL and survives worker

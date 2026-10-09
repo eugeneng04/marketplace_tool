@@ -11,6 +11,7 @@ import { meetsAlertRules } from "./dealAlerts.js";
 import { scoreListing } from "./dealScoring.js";
 import { parsePrice } from "./utils.js";
 import { parseVehicleListing } from "./vehicleParser.js";
+import { ListingDetailUnavailableError } from "./facebookGraphqlClient.js";
 
 const DEFAULT_STALE_DETAIL_HOURS = 24;
 // Process the detail queue in order; the shared Facebook limiter spaces
@@ -58,6 +59,8 @@ export function shouldFetchDetail(refreshState, staleDetailHours, { descriptionI
   if (["rejected", "hidden", "sold"].includes(refreshState.status)) {
     return false;
   }
+
+  if (refreshState.parsed_attributes_json?.detailRefresh?.status === "incomplete") return true;
 
   const hasDescription = typeof refreshState.description_raw === "string" && refreshState.description_raw.trim().length > 0 && !descriptionIsCardSummary;
   const hasImages = Array.isArray(refreshState.image_urls) && refreshState.image_urls.length > 0;
@@ -150,7 +153,8 @@ async function runProfileSyncUnlocked({ db, connector, profile, preferManualTran
   try {
     const captured = await connector.captureListingCards(profile);
     summary.diagnostics = captured.sourceMetadata?.diagnostics ?? null;
-    let detailError = null;
+    let interruption = null;
+    const detailFailures = [];
 
     const preparedItems = await mapWithConcurrency(captured.cards, DETAIL_FETCH_CONCURRENCY, async (card) => {
       const cardRaw = connector.normalizeCardToRawSourceItem(card, captured.capturedAt);
@@ -186,7 +190,7 @@ async function runProfileSyncUnlocked({ db, connector, profile, preferManualTran
         refreshState?.description_raw?.trim() && card.rawCardText?.trim() &&
         refreshState.description_raw.trim() === card.rawCardText.trim()
       );
-      const needsDetail = !detailError && shouldFetchDetail(refreshState, staleDetailHours, { descriptionIsCardSummary });
+      const needsDetail = shouldFetchDetail(refreshState, staleDetailHours, { descriptionIsCardSummary });
       const cachedAttributes = refreshState?.parsed_attributes_json ?? {};
       let raw = refreshState
           ? {
@@ -207,19 +211,28 @@ async function runProfileSyncUnlocked({ db, connector, profile, preferManualTran
               }
             }
           : cardRaw;
-      if (needsDetail) {
+      raw.sourceMetadata = { ...(raw.sourceMetadata ?? {}), detailFetched: false };
+      let detailRefresh = cachedAttributes.detailRefresh;
+      if (needsDetail && !interruption) {
+        const attemptedAt = new Date().toISOString();
         try {
           raw = await connector.fetchListingDetail(card);
           raw.sourceMetadata = { ...(raw.sourceMetadata ?? {}), detailFetched: true };
+          detailRefresh = { status: "complete", attemptedAt, runId: run.id };
           summary.detailPagesOpened += 1;
         } catch (error) {
-          // Save the available cards/details before surfacing the interruption.
-          // Remaining cards issue no requests; incomplete saved items retry on
-          // the next search after the shared cooldown expires.
-          detailError = error;
+          const isolated = error instanceof ListingDetailUnavailableError;
+          detailRefresh = {
+            status: "incomplete", reason: isolated ? "listing_rejected" : "collection_interrupted",
+            attemptedAt, runId: run.id
+          };
+          if (isolated) detailFailures.push(error.sourceItemId);
+          else interruption = error;
         }
+      } else if (needsDetail) {
+        detailRefresh = { status: "incomplete", reason: "collection_interrupted", runId: run.id };
       }
-      return { card, raw };
+      return { card, raw, detailRefresh };
     });
     const matchingItems = preparedItems.filter(({ raw, skipped }) => !skipped && matchesProfileFilters(profile, raw));
     summary.resultsFound = matchingItems.length;
@@ -231,7 +244,7 @@ async function runProfileSyncUnlocked({ db, connector, profile, preferManualTran
 
     const qualifyingAlertItemIds = [];
 
-    for (const { card, raw } of matchingItems) {
+    for (const { card, raw, detailRefresh } of matchingItems) {
       const parsedPrice = parsePrice(raw.priceRaw);
       const upsertResult = await ops.upsertRawItemSnapshot(db, {
         profile,
@@ -248,6 +261,7 @@ async function runProfileSyncUnlocked({ db, connector, profile, preferManualTran
       }
 
       const parsed = parseVehicleListing(raw);
+      if (detailRefresh) parsed.attributes.detailRefresh = detailRefresh;
       await ops.saveParsedItem(db, upsertResult.itemId, parsed);
 
       const marketStats = await ops.computeMarketStats(db, {
@@ -283,12 +297,19 @@ async function runProfileSyncUnlocked({ db, connector, profile, preferManualTran
       // create duplicate in-app alerts for the same profile/listing pair.
       // meetsAlertRules already enforces min score, min confidence, and max age,
       // so low-confidence listings never produce alerts.
-      if (alertCheck.ok) {
+      if (alertCheck.ok && detailRefresh?.status !== "incomplete") {
         qualifyingAlertItemIds.push(upsertResult.itemId);
       }
     }
 
-    if (detailError) throw detailError;
+    if (detailFailures.length) {
+      const listingIds = detailFailures.slice(0, 10).join(", ");
+      const remainder = detailFailures.length > 10 ? `, and ${detailFailures.length - 10} more` : "";
+      const message = `Listing details incomplete. ${summary.detailPagesOpened} succeeded; ${detailFailures.length} rejected listings: ${listingIds}${remainder}.`;
+      if (interruption) interruption.message = `${interruption.message} ${message}`;
+      else interruption = new Error(message);
+    }
+    if (interruption) throw interruption;
     summary.alertsCreated = await ops.finishSearchRun(db, run.id, summary, profile.id, qualifyingAlertItemIds);
     return { runId: run.id, ...summary };
   } catch (error) {

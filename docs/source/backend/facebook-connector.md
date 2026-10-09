@@ -52,6 +52,7 @@ Only fetch detail pages for:
 - saved listings
 - contacted listings
 - listings missing important parsed fields
+- listings with an incomplete detail refresh
 - manual refresh requests
 
 ## Safety Constraint
