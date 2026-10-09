@@ -1012,9 +1012,16 @@ async function runProfile(profileId, button) {
   try {
     const data = await api(`/profiles/${profileId}/run`, { method: "POST" });
     const found = data.run.resultsFound ?? 0;
-    toast(data.run.status === "failed"
-      ? `Search failed: ${data.run.errorMessage || "Could not complete search"}`
-      : `Run finished: ${found} results, ${data.run.newItems ?? 0} new, ${data.run.unknownCount ?? 0} unverified, ${data.run.alertsCreated ?? 0} alerts`);
+    if (data.run.status === "failed") {
+      toast(`Search failed: ${data.run.errorMessage || "Could not complete search"}`);
+    } else {
+      toast(`Run finished: ${found} results, ${data.run.newItems ?? 0} new, ${data.run.unknownCount ?? 0} unverified, ${data.run.alertsCreated ?? 0} alerts`);
+      // Card-first runs can save older postings that rank below the default
+      // newest-first cutoff, so show this run's own results first.
+      const profile = state.profiles.find((item) => item.id === profileId);
+      if ($("#filterSearch")) $("#filterSearch").value = profile?.query ?? "";
+      if ($("#filterSort")) $("#filterSort").value = "recent";
+    }
     await Promise.all([loadListings(), loadRuns(), loadDeals(), loadAlerts()]);
   } finally {
     if (button) {

@@ -998,6 +998,7 @@ async function addListingCollectionState(db, items) {
 const LISTING_SORTS = {
   newest: "ORDER BY i.posted_at DESC NULLS LAST, i.last_seen_at DESC",
   oldest: "ORDER BY i.posted_at ASC NULLS LAST, i.last_seen_at ASC",
+  recent: "ORDER BY i.last_seen_at DESC",
   price_asc: "ORDER BY i.current_price ASC NULLS LAST, i.last_seen_at DESC",
   price_desc: "ORDER BY i.current_price DESC NULLS LAST, i.last_seen_at DESC",
   score: "ORDER BY ds.score DESC NULLS LAST, ds.confidence DESC NULLS LAST, i.last_seen_at DESC"

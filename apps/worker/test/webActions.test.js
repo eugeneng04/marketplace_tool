@@ -112,6 +112,7 @@ function workflowHarness(request) {
     return nodes.get(selector);
   }
   const context = vm.createContext({
+    URLSearchParams,
     localStorage: { getItem: () => null },
     window: { location: { hostname: "resale.test", origin: "https://resale.test" } },
     document: {
@@ -390,4 +391,24 @@ test("deal cards require fresh details and matching filters before showing confi
   const display = app.context.dealDisplay({ ...scored, detailRefresh: { state: "fresh" }, qualifications: [{ state: "match" }] });
   assert.equal(display.confirmed, true);
   assert.equal(display.label, "Strong candidate");
+});
+
+test("a finished profile run surfaces its own results first", async () => {
+  let listingsPath = null;
+  const app = workflowHarness(async (path) => {
+    if (path.includes("/profiles/")) {
+      return { run: { status: "completed", resultsFound: 15, newItems: 13, unknownCount: 0, detailPagesOpened: 0, alertsCreated: 0 } };
+    }
+    if (path.startsWith("/listings")) { listingsPath = path; return { listings: [] }; }
+    if (path.startsWith("/runs")) return { runs: [] };
+    if (path.startsWith("/deals")) return { deals: [] };
+    if (path.startsWith("/alerts")) return { alerts: [] };
+    throw new Error(`Unexpected request ${path}`);
+  });
+  app.state().profiles = [{ id: "p1", query: "240sx" }];
+  await app.context.runProfile("p1", { textContent: "Run", disabled: false });
+  assert.equal(app.node("#filterSearch").value, "240sx");
+  assert.equal(app.node("#filterSort").value, "recent");
+  assert.match(listingsPath, /q=240sx/);
+  assert.match(listingsPath, /sort=recent/);
 });

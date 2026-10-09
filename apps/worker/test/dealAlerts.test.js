@@ -72,6 +72,7 @@ test("listing sort falls back to newest for unknown values", async () => {
   assert.ok(normalizeListingSort("price_desc").includes("current_price DESC"));
   assert.ok(normalizeListingSort("score").includes("ds.score DESC"));
   assert.ok(normalizeListingSort("oldest").includes("posted_at ASC"));
+  assert.ok(normalizeListingSort("recent").includes("last_seen_at DESC"));
   assert.equal(normalizeListingSort("bogus"), normalizeListingSort("newest"));
   assert.equal(normalizeListingSort(undefined), normalizeListingSort("newest"));
 });
