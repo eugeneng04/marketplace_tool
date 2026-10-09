@@ -37,6 +37,13 @@ Local development retains the internal scheduler by default.
 
 ## Free-tier operation and limitations
 
+- Authenticated `POST /facebook/listing-html-test` with a numeric `listingId`
+  tests a public listing through direct HTML GETs on Render. It sends no cookies,
+  uses no browser or GraphQL POST, and returns only field availability and timings.
+  Extraction matches the requested ID, excluding recommended listings. The test
+  respects shared Facebook pacing and cooldown, bounds redirects and response size,
+  and does not write listings. It does not prove search or scheduled collection works.
+
 - For an existing Blueprint-managed Node service, sync the updated Blueprint to
   change its runtime to Docker. Pushing code alone does not change the runtime.
   Keep the existing service, URL, and private environment values. The container
