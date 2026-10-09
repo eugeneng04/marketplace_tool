@@ -700,11 +700,8 @@ function inspectListingDetailFailure(data, session) {
     "vehicle_exterior_color", "vehicle_interior_color", "vehicle_fuel_type",
     "vehicle_number_of_owners", "vehicle_is_paid_off", "vehicle_seller_type"
   ];
-  const pathFields = new Set([
-    "data", "viewer", "marketplace_product_details_page", "target",
-    ...targetFields, "text", "formatted_amount", "amount", "currency", "image", "uri",
-    "reverse_geocode", "city_page", "display_name", "name", "unit", "value"
-  ]);
+  const isSchemaField = field => typeof field === "string" && /^[a-z_]{1,64}$/.test(field) &&
+    !/cookie|token|password|secret|authorization|credential|fb_dtsg|jazoest|csrf|api_key|private_key|^lsd$|^xs$|^c_user$|^session(?:_|$)|^headers?$/.test(field);
   return {
     operation: "listing_detail",
     targetPresent: target != null,
@@ -714,6 +711,8 @@ function inspectListingDetailFailure(data, session) {
     errors: Array.isArray(safe) ? safe.slice(0, 3).map((error, index) => ({
       knownFields: errorFields.filter(field => Object.hasOwn(data.errors[index] ?? {}, field)),
       unknownFieldCount: Object.keys(data.errors[index] ?? {}).filter(field => !errorFields.includes(field)).length,
+      unknownFields: sanitizeFacebookEvidence(Object.keys(error ?? {}).filter(field => !errorFields.includes(field)), session)
+        .filter(isSchemaField).slice(0, 10),
       knownMessage: data.errors[index]?.message === LISTING_FIELD_EXCEPTION_MESSAGE,
       severity: data.errors[index]?.severity == null ? null
         : ["WARNING", "ERROR", "CRITICAL", "FATAL"].includes(data.errors[index].severity) ? data.errors[index].severity : "[other]",
@@ -733,7 +732,7 @@ function inspectListingDetailFailure(data, session) {
       typePresent: error?.type != null || error?.extensions?.type != null,
       typeShape: (error?.type ?? error?.extensions?.type) == null ? null : typeof (error.type ?? error.extensions.type),
       path: Array.isArray(error?.path) ? error.path.slice(0, 16).map(part =>
-        Number.isSafeInteger(part) && part >= 0 ? part : pathFields.has(part) ? part : "[other]") : null
+        Number.isSafeInteger(part) && part >= 0 ? "[index]" : isSchemaField(part) ? part : "[other]") : null
     })) : []
   };
 }

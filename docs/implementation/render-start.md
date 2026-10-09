@@ -75,7 +75,12 @@ Local development retains the internal scheduler by default.
   `GET /facebook/listings/{id}` exposes a bounded `detailDiagnostic` on GraphQL
   rejection through the existing HTTP 500 response. It reports target presence,
   error count, known field names, unknown field count, numeric codes, type shape,
-  and allowlisted path fields. It includes no raw error message or response.
+  and bounded schema field names. `unknownFields` includes at most 10 unknown
+  error keys. `path` preserves at most 16 segments, with numeric indexes replaced
+  by `[index]` and rejected segments replaced by `[other]`. Schema names must
+  match `^[a-z_]{1,64}$` after session-secret removal. Credential field names,
+  arbitrary strings, and identifier values are excluded. These names describe
+  GraphQL structure. The diagnostic includes no raw error message or response.
   Local fixtures prove the continuation rule. They do not establish that the
   live upstream error has the recognized shape or that a saved Render run works.
   The diagnostic also reports enumerated severity, retry and reauthentication

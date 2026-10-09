@@ -289,10 +289,57 @@ test("unknown detail diagnostics expose bounded structure through the API error 
   assert.equal(response.body.detailDiagnostic.errors[0].typeShape, "string");
   assert.equal(JSON.stringify(response.body.detailDiagnostic.errors[0].knownFields), '["message","code","type","path","extensions"]');
   assert.equal(response.body.detailDiagnostic.errors[0].unknownFieldCount, 1);
+  assert.equal(JSON.stringify(response.body.detailDiagnostic.errors[0].unknownFields), '[]');
   assert.equal(response.body.detailDiagnostic.errors[0].extensionsPresent, true);
   assert.equal(JSON.stringify(response.body.detailDiagnostic.errors[0].path), '["viewer","target","[other]","[other]"]');
   assert.doesNotMatch(JSON.stringify(response.body.detailDiagnostic), /private|page-secret|secret\.example|token|cookie/);
   assert.equal(scenario.client.session, null);
+});
+
+test("detail diagnostics retain bounded schema names and preserve path positions", async t => {
+  const names = Array.from({ length: 20 }, (_, index) => `field_${String.fromCharCode(97 + index)}`);
+  const response = { errors: [{ message: fieldException,
+    ...Object.fromEntries(names.map(field => [field, "private-value"])),
+    path: ["viewer", "marketplace_product_details_page", "target", "optional_schema_field", 123456789,
+      "invalid-field", ...names]
+  }] };
+  const scenario = setup(t, { rejected: { "102": response } });
+  await assert.rejects(scenario.client.getListingDetail("102"), error => {
+    assert.equal(error instanceof ListingDetailUnavailableError, false);
+    const metadata = error.facebookDetailDiagnostic.errors[0];
+    assert.deepEqual(metadata.unknownFields, ["field_a", "field_b", "field_c", "field_d", "field_e",
+      "field_f", "field_g", "field_h", "field_i", "field_j"]);
+    assert.deepEqual(metadata.path, ["viewer", "marketplace_product_details_page", "target", "optional_schema_field",
+      "[index]", "[other]", "field_a", "field_b", "field_c", "field_d", "field_e", "field_f",
+      "field_g", "field_h", "field_i", "field_j"]);
+    assert.doesNotMatch(JSON.stringify(error.facebookDetailDiagnostic), /private-value|123456789|invalid-field/);
+    return true;
+  });
+  assert.equal(scenario.client.session, null);
+});
+
+test("detail schema names reject credential fields, malicious strings, and configured session secrets", async t => {
+  const credentialFields = ["fb_dtsg", "lsd", "c_user", "xs", "access_token", "cookie", "authorization",
+    "password", "jazoest", "csrf", "session_secret", "api_key", "credentials"];
+  const rejectedNames = [...credentialFields, "field_pinetree", "riverbend", "forestshade", "plainuser",
+    "https://private.example/?data=hidden", "authorization: hidden", "line\nbreak", "listing_12345",
+    "MixedCase", "a".repeat(65), ""];
+  const acceptedNames = ["optional_schema_field", "a".repeat(64), "_schema_field"];
+  const response = { errors: [{ message: fieldException,
+    ...Object.fromEntries([...rejectedNames, ...acceptedNames].map(field => [field, "private-value"])),
+    path: [...rejectedNames, -1, null, { private: "value" }, ...acceptedNames]
+  }] };
+  const scenario = setup(t, { rejected: { "102": response } });
+  const session = await scenario.client.ensureSession();
+  Object.assign(session, { fbDtsg: "pinetree", lsd: "riverbend", cookieHeader: "c_user=plainuser; xs=forestshade" });
+  await assert.rejects(scenario.client.getListingDetail("102"), error => {
+    const metadata = error.facebookDetailDiagnostic.errors[0];
+    assert.deepEqual(metadata.unknownFields, acceptedNames);
+    assert.deepEqual(metadata.path, Array(16).fill("[other]"));
+    assert.doesNotMatch(JSON.stringify(error.facebookDetailDiagnostic),
+      /pinetree|riverbend|forestshade|plainuser|private-value|private\.example|hidden|listing_12345|MixedCase|cookie|authorization|fb_dtsg|access_token|credentials|api_key/);
+    return true;
+  });
 });
 
 test("detail diagnostics report fixed metadata and target presence without private values", async t => {
