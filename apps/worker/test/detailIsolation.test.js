@@ -106,6 +106,28 @@ test("one listing field rejection leaves that item incomplete and continues late
   assert.equal(scenario.tokenPages, 1);
 });
 
+test("validated delivery omission completes a saved refresh and persists bounded provenance", async t => {
+  const payload = detailPayload("102");
+  Object.assign(payload.data.viewer.marketplace_product_details_page.target, {
+    listing_price: { formatted_amount: "$12,000", currency: "USD" },
+    location_text: { text: "Oakland, California" },
+    marketplace_listing_seller: { id: "seller-1", name: "Test seller" },
+    creation_time: 1_757_000_000, is_pending: false, is_sold: false, delivery_data: null
+  });
+  payload.errors = [{ message: fieldException,
+    path: ["viewer", "marketplace_product_details_page", "target", "delivery_data"],
+    severity: "ERROR", mids: ["private-mid"], debug_link: null }];
+  const scenario = setup(t, { ids: ["102"], rejected: { "102": payload } });
+  const summary = await scenario.run();
+  assert.equal(summary.status, "completed");
+  assert.equal(summary.detailPagesOpened, 1);
+  assert.equal(scenario.snapshots[0].sourceMetadata.detailFetched, true);
+  const persisted = scenario.refreshStates.get("102").parsed_attributes_json;
+  assert.equal(persisted.detailRefresh.status, "complete");
+  assert.deepEqual(persisted.marketplaceMetadata.optionalOmission, { field: "delivery_data", signatureVersion: 1 });
+  assert.equal(JSON.stringify(persisted).includes("private-mid"), false);
+});
+
 test("an errored partial target is discarded without photos or fallback and preserves the session", async t => {
   const scenario = setup(t, { rejected: { "102": { ...detailPayload("102"), errors: [{ message: fieldException }] } } });
   const session = await scenario.client.ensureSession();
