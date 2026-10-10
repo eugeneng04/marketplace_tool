@@ -8,6 +8,16 @@ Local development retains the internal scheduler by default.
 
 ## Accounts and deployment
 
+Admin `POST /network/proxy-test` accepts `{"proxyServer":"http://PUBLIC_IPV4:PORT"}`
+and tests HTTPS connectivity to the fixed `https://example.com/` target from the
+Render HTTP client. It allows only public IPv4 HTTP proxies without credentials,
+keeps TLS certificate verification enabled, disables redirects, and uses a
+ten-second request timeout. A fresh request context receives no application
+credentials or configured Facebook cookies. Results include HTTP status, expected
+page verification, duration, and a sanitized failure category. HTTP 200 from the
+diagnostic endpoint alone is not success; require `success: true` in its result.
+This does not test Facebook access or configure collection to use the proxy.
+
 1. Push the application and `.github/workflows/scheduled-searches.yml` to the
    default branch of your GitHub repository. Never commit `.env` or cookies.
 2. Create a Neon Free project near your Render region. Copy the **direct**

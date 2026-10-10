@@ -2,6 +2,7 @@ import {createCollectorStore, createRemoteCollector} from './remoteCollector.js'
 import { configureFacebookCooldown, scheduleFacebookRequest } from "./facebookRequestLimiter.js";
 import { createBrowserDiagnostic } from "./facebookBrowserDiagnostic.js";
 import { inspectListingHtml } from "./facebookListingHtmlDiagnostic.js";
+import { inspectProxyConnectivity } from "./proxyConnectivityDiagnostic.js";
 import { inspectSearchPayload } from "./facebookSearchInspection.js";
 import { readFile } from "node:fs/promises";
 import { createDueSearchRunner } from "./scheduler.js";
@@ -363,6 +364,10 @@ export async function createApp({ config = loadConfig(), connector: suppliedConn
           runs.push({ profileId: profile.id, ...(await runProfileSync({ db, connector, profile: fullProfile, preferManualTransmission: config.preferManualTransmission })) });
         }
         return sendJson(res, 200, { count: runs.length, runs });
+      }
+      if (pathname === '/network/proxy-test' && req.method === 'POST') {
+        const body = parseJsonBody(await readBody(req, 1024));
+        return sendJson(res, 200, await inspectProxyConnectivity(body.proxyServer));
       }
       if (pathname === '/facebook/listing-html-test' && req.method === 'POST') {
         const body = parseJsonBody(await readBody(req, 1024));
