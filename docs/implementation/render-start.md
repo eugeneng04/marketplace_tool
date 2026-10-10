@@ -53,6 +53,15 @@ This does not test Facebook access or configure collection to use the proxy.
   Extraction matches the requested ID, excluding recommended listings. The test
   respects shared Facebook pacing and cooldown, bounds redirects and response size,
   and does not write listings. It does not prove search or scheduled collection works.
+  Optional `proxyServer` selects an HTTP proxy with a public IPv4 address and port,
+  using the same validation as `/network/proxy-test`. This path uses Playwright's
+  HTTP client without launching Chromium. Each redirect uses a fresh context so
+  Facebook's Set-Cookie headers are never replayed. TLS verification stays enabled;
+  no app credentials or Facebook cookies are sent through the proxy. Network
+  failures return a sanitized `proxy_request_failed` result. The proxy path
+  rejects HTML over 5 MB after the HTTP client has buffered it; that check
+  limits parsing, not download size or peak memory.
+  The diagnostic does not change the proxy used by normal collection.
 
 - For an existing Blueprint-managed Node service, sync the updated Blueprint to
   change its runtime to Docker. Pushing code alone does not change the runtime.

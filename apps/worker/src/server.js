@@ -3,6 +3,7 @@ import { configureFacebookCooldown, scheduleFacebookRequest } from "./facebookRe
 import { createBrowserDiagnostic } from "./facebookBrowserDiagnostic.js";
 import { inspectListingHtml } from "./facebookListingHtmlDiagnostic.js";
 import { inspectProxyConnectivity } from "./proxyConnectivityDiagnostic.js";
+import { inspectProxyListingHtml } from "./facebookProxyHtmlDiagnostic.js";
 import { inspectSearchPayload } from "./facebookSearchInspection.js";
 import { readFile } from "node:fs/promises";
 import { createDueSearchRunner } from "./scheduler.js";
@@ -371,6 +372,10 @@ export async function createApp({ config = loadConfig(), connector: suppliedConn
       }
       if (pathname === '/facebook/listing-html-test' && req.method === 'POST') {
         const body = parseJsonBody(await readBody(req, 1024));
+        if (body.proxyServer !== undefined) {
+          return sendJson(res, 200, await inspectProxyListingHtml(body.listingId, body.proxyServer,
+            { requestsPerMinute: config.facebookMaxRequestsPerMinute }));
+        }
         return sendJson(res, 200, await inspectListingHtml(body.listingId, { requestsPerMinute: config.facebookMaxRequestsPerMinute }));
       }
       if (pathname === "/facebook/browser-test" && req.method === "GET") {

@@ -8,7 +8,7 @@ for (const [address, prefix] of [
   ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 3]
 ]) blocked.addSubnet(address, prefix);
 
-export async function inspectProxyConnectivity(proxyServer, { createContext } = {}) {
+export function validateProxyServer(proxyServer) {
   let proxy;
   try { proxy = new URL(proxyServer); } catch {}
   if (!/^http:\/\/[0-9.]+:[0-9]+\/?$/.test(proxyServer ?? '') ||
@@ -17,9 +17,14 @@ export async function inspectProxyConnectivity(proxyServer, { createContext } = 
       proxy.pathname !== '/' || proxy.search || proxy.hash) {
     throw Object.assign(new Error('Provide an HTTP proxy with a public IPv4 address and port, without credentials.'), { status: 400 });
   }
+  return proxy.origin;
+}
+
+export async function inspectProxyConnectivity(proxyServer, { createContext } = {}) {
+  const server = validateProxyServer(proxyServer);
   const started = performance.now();
   const report = { executionSource: 'server HTTP client', target: 'https://example.com/',
-    proxyServer: proxy.origin, configuredCookiesInjected: false, credentialsSent: false,
+    proxyServer: server, configuredCookiesInjected: false, credentialsSent: false,
     tlsVerification: true, success: false };
   let context;
   try {
@@ -27,7 +32,7 @@ export async function inspectProxyConnectivity(proxyServer, { createContext } = 
       const { request } = await import('playwright-core');
       createContext = options => request.newContext(options);
     }
-    context = await createContext({ proxy: { server: proxy.origin }, timeout: 10_000,
+    context = await createContext({ proxy: { server }, timeout: 10_000,
       ignoreHTTPSErrors: false });
     const response = await context.get(report.target, { maxRedirects: 0 });
     report.httpStatus = response.status();
