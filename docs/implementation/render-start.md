@@ -68,7 +68,8 @@ This does not test Facebook access or configure collection to use the proxy.
   Keep the existing service, URL, and private environment values. The container
   build never includes `.env` files or Facebook cookies.
 - `Test Facebook browser` runs a bounded, temporary browser diagnostic. It does
-  not write listings or replace the GraphQL collector. A successful browser test
+  not write listings. Saved searches use isolated Chromium with
+  `FB_SEARCH_SOURCE=browser`; conditional listing details still use GraphQL. A successful browser test
   is still required before using this runtime for collection.
 
 - `FB_MAX_REQUESTS_PER_MINUTE` is enforced across all Facebook clients in one

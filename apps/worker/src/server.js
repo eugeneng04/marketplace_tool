@@ -160,6 +160,7 @@ function buildConnector(config, client) {
     mode: config.connectorMode,
     client,
     facebookCookie: config.facebookCookie,
+    facebookSearchSource: config.facebookSearchSource,
     facebookMaxRequestsPerMinute: config.facebookMaxRequestsPerMinute,
     facebookUserAgent: config.facebookUserAgent,
     facebookSearchBaseUrl: config.facebookSearchBaseUrl,
@@ -171,6 +172,7 @@ function buildConnector(config, client) {
 function buildFacebookGraphqlClient(config) {
   return createFacebookGraphqlClient({
     facebookCookie: config.facebookCookie,
+    facebookSearchSource: config.facebookSearchSource,
     facebookMaxRequestsPerMinute: config.facebookMaxRequestsPerMinute,
     facebookUserAgent: config.facebookUserAgent,
     facebookSearchBaseUrl: config.facebookSearchBaseUrl,
@@ -200,7 +202,7 @@ export function parseFacebookSearchInput(body) {
 
   return {
     query: `${body.query}`,
-    searchSource: body.searchSource === "marketplace_search_page" ? body.searchSource : undefined,
+    searchSource: ["marketplace_search_page", "browser", "graphql"].includes(body.searchSource) ? body.searchSource : undefined,
     latitude,
     longitude,
     radiusKm: parseNumber(body.radiusKm ?? body.radius_km, 50),
@@ -417,7 +419,7 @@ export async function createApp({ config = loadConfig(), connector: suppliedConn
         job.savedNewestWithinDays = filters.newestWithinDays ?? 1;
         job.inspectionNewestWithinDays = input.newestWithinDays;
         const inspectionClient = (await remoteCollector.status()).enabled ? facebookGraphqlClient : body.mode === 'logged_out'
-          ? createFacebookGraphqlClient({...config, facebookCookie:'', useChromeCookies:false})
+          ? createFacebookGraphqlClient({...config, facebookCookie:'', useChromeCookies:false, facebookSearchSource:'graphql'})
           : connector.client ?? facebookGraphqlClient;
         job.mode = body.mode === 'logged_out' ? 'logged_out' : 'configured';
         void inspectionClient.searchListings(input).then(result=>{

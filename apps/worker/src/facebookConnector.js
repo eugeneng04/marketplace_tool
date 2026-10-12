@@ -192,6 +192,7 @@ export function detailToRawSourceItem(detail, card) {
 export function createFacebookGraphqlClient(options = {}) {
   return new FacebookGraphqlClient({
     facebookCookie: options.facebookCookie,
+    facebookSearchSource: options.facebookSearchSource,
     useChromeCookies: options.useChromeCookies,
     facebookMaxRequestsPerMinute: options.facebookMaxRequestsPerMinute,
     facebookUserAgent: options.facebookUserAgent,
@@ -202,6 +203,7 @@ export function createFacebookGraphqlClient(options = {}) {
 
 export function createFacebookGraphqlConnector({
   facebookCookie,
+  facebookSearchSource,
   facebookMaxRequestsPerMinute,
   facebookUserAgent,
   facebookSearchBaseUrl,
@@ -211,6 +213,7 @@ export function createFacebookGraphqlConnector({
 }) {
   const client = suppliedClient ?? createFacebookGraphqlClient({
     facebookCookie,
+    facebookSearchSource,
     facebookMaxRequestsPerMinute,
     facebookUserAgent,
     facebookSearchBaseUrl,
@@ -269,9 +272,7 @@ export function createFacebookGraphqlConnector({
         url: card.listingUrl,
         normalizedUrl: normalizeUrl(card.listingUrl),
         titleRaw: card.titleRaw,
-        // Search cards contain no seller description; keep this unset so the
-        // sync engine knows that detail enrichment is still needed.
-        descriptionRaw: undefined,
+        descriptionRaw: card.sourceMetadata?.raw?.redacted_description?.text ?? undefined,
         priceRaw: card.priceRaw,
         locationRaw: card.locationRaw,
         imageUrls: [card.thumbnailUrl].filter(Boolean),
@@ -292,6 +293,7 @@ export function createFacebookConnector(options = {}) {
   const {
     mode = "mock",
     facebookCookie = "",
+    facebookSearchSource,
     facebookMaxRequestsPerMinute,
     facebookUserAgent,
     facebookSearchBaseUrl,
@@ -306,6 +308,7 @@ export function createFacebookConnector(options = {}) {
   if (mode === "facebook_graphql") {
     return createFacebookGraphqlConnector({
       facebookCookie,
+      facebookSearchSource,
       facebookMaxRequestsPerMinute,
       facebookUserAgent,
       facebookSearchBaseUrl,

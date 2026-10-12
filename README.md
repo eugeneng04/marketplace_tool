@@ -28,9 +28,9 @@ Backend-first MVP for local-first resale intelligence, designed to run as a web 
 ## Connector modes
 
 - `mock`: deterministic synthetic Marketplace data for testing.
-- `facebook_graphql`: standalone direct GraphQL Marketplace queries adapted from `jdcodes1/facebook-marketplace-mcp`, without MCP or an LLM in the loop.
+- `facebook_graphql`: Marketplace collection through rendered search cards, with GraphQL for conditional listing details.
 
-`facebook_graphql` defaults to cookie-free Marketplace page tokens. Facebook may restrict logged-out searches depending on the server IP or query; deployment success does not guarantee live results. Set `FB_USE_CHROME_COOKIES=true` to explicitly enable local Chrome-session extraction, or optionally provide `FB_COOKIE`.
+`FB_SEARCH_SOURCE=browser` is the default. Search runs use an isolated Playwright Chromium context; Render supplies its browser in the Docker image. Configure `FB_COOKIE` for authenticated collection. `FB_SEARCH_SOURCE=graphql` selects direct HTTP search and cookie-free page tokens when no cookie is configured. Facebook can reject either session or request context; verify actual search results after deployment. Local direct GraphQL mode can explicitly extract Chrome-session cookies with `FB_USE_CHROME_COOKIES=true`.
 
 ## Environment variables
 
@@ -38,6 +38,7 @@ Backend-first MVP for local-first resale intelligence, designed to run as a web 
 - `PORT` (optional, default `10000`)
 - `API_TOKEN` (optional but recommended for non-health endpoints)
 - `CONNECTOR_MODE` (`mock` or `facebook_graphql`)
+- `FB_SEARCH_SOURCE` (`browser` by default, or `graphql`; browser mode requires Playwright Chromium)
 - `PREFER_MANUAL_TRANSMISSION` (`true` or `false`)
 - `MAX_CARDS_PER_RUN` (default `25`)
 

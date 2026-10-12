@@ -439,3 +439,11 @@ test('configured page search rejects explicit logged-out viewer despite visible 
   await assert.rejects(client.searchListings({searchSource:'marketplace_search_page',query:'frs',limit:3}), /logged-out viewer/);
   assert.equal(client.lastSearchInspection.pageViewer,'logged_out');
 });
+
+test('embedded fields and anchor fallback both survive a partially structured visible feed', () => {
+  const html='<script type="application/json">{"id":"123","marketplace_listing_title":"Scion FR-S","listing_price":{"formatted_amount":"$10,000"}}</script><a href="/marketplace/item/123/">Scion FR-S $10,000</a><a href="/marketplace/item/456/"><span>Subaru BRZ</span><span>$12,000</span></a>';
+  const cards=parseMarketplaceSearchHtml(html,5,new Set(['123','456']));
+  assert.deepEqual(cards.map(card=>card.id),['123','456']);
+  assert.equal(cards[0].raw.marketplace_listing_title,'Scion FR-S');
+  assert.equal(cards[1].title,'Subaru BRZ');
+});

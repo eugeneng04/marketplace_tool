@@ -35,6 +35,7 @@ function buildConnector(config) {
   return createFacebookConnector({
     mode: config.connectorMode,
     facebookCookie: config.facebookCookie,
+    facebookSearchSource: config.facebookSearchSource,
     facebookMaxRequestsPerMinute: config.facebookMaxRequestsPerMinute,
     facebookUserAgent: config.facebookUserAgent,
     facebookSearchBaseUrl: config.facebookSearchBaseUrl,
@@ -46,6 +47,7 @@ function buildConnector(config) {
 function buildFacebookGraphqlClient(config) {
   return createFacebookGraphqlClient({
     facebookCookie: config.facebookCookie,
+    facebookSearchSource: config.facebookSearchSource,
     facebookMaxRequestsPerMinute: config.facebookMaxRequestsPerMinute,
     facebookUserAgent: config.facebookUserAgent,
     facebookSearchBaseUrl: config.facebookSearchBaseUrl,

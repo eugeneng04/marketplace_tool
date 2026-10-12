@@ -72,8 +72,8 @@ This local verification does not establish the live nullable field and metadata 
 
 `POST /facebook/search` accepts `searchSource: "marketplace_search_page"` for an
 explicit document-only search. It uses the configured Facebook cookie and shared
-request limiter, without a search GraphQL POST or listing-detail requests. The
-normal saved-profile search remains GraphQL. Login pages and pages without
+request limiter, without a search GraphQL POST or listing-detail requests. Saved-profile
+collection now uses Chromium, as described below. Login pages and pages without
 parseable cards fail the probe. Page results report
 `requestedFiltersVerified: false` and do not provide pagination. Passing URL
 parameters does not establish that Facebook applied a saved profile's filters.
@@ -83,9 +83,28 @@ configured. It prefers embedded listing objects to retain their initial fields;
 anchor parsing separates listing badges from vehicle titles. The Render browser
 diagnostic accepts a bounded `query` and reports `pageViewer` and
 `queryMatchingCardCount`. Visible generic suggestions do not prove query matches
-or saved-profile filtering. No saved-search default changes until validation.
+or saved-profile filtering. Saved searches use the Chromium collection path described below.
 
 `POST /facebook/search-inspection` accepts the same `searchSource` and an optional
 saved `profileId`. It runs asynchronously and preserves the selected profile's
 query and filters, with the existing diagnostic freshness override and pacing.
 This is a diagnostic and does not ingest listings.
+
+### Saved search collection through Chromium
+
+The worker's `FB_SEARCH_SOURCE` defaults to `browser`. `graphql` retains the
+existing direct operation for explicit testing. Saved searches collect rendered
+cards in a fresh Render headless Chromium context with the configured cookie.
+The search sends the saved query, coordinates, price, radius, category and
+freshness URL parameters. It uses the shared cooldown and pacing, caps document
+and GraphQL requests, blocks image downloads, and closes the browser after
+collection. It fetches no listing details or gallery during search. Browser
+session cookies stay in memory for subsequent conditional GraphQL detail calls.
+
+Only IDs visible in the rendered search are eligible for initial embedded-field
+parsing. Generic initial page suggestions cannot replace the rendered cards.
+Structured initial descriptions are saved when supplied. Missing mileage, title
+status and transmission remain unverified under the existing qualification flow.
+HTML pagination and server-side application of every URL filter remain
+unverified; `requestedFiltersVerified: false` records this limitation. Empty or
+unverifiable browser results fail rather than claim successful collection.

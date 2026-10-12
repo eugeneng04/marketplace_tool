@@ -345,7 +345,7 @@ function stripHtml(value) {
     .replace(/\s+/g, " ").trim();
 }
 
-export function parseMarketplaceSearchHtml(html, limit = 25) {
+export function parseMarketplaceSearchHtml(html, limit = 25, listingIds) {
   const structured = [];
   for (const block of html.matchAll(/<script\b[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
     try {
@@ -354,20 +354,19 @@ export function parseMarketplaceSearchHtml(html, limit = 25) {
       while (pending.length) {
         const node = pending.pop();
         if (!node || typeof node !== "object") continue;
-        if (node.id && typeof node.marketplace_listing_title === "string") structured.push(node);
+        if (node.id && typeof node.marketplace_listing_title === "string" && (!listingIds || listingIds.has(`${node.id}`))) structured.push(node);
         for (const child of Object.values(node)) if (child && typeof child === "object") pending.push(child);
       }
     } catch { /* Ignore script blocks that are not JSON. */ }
   }
-  if (structured.length) return parseSearchResponse({data:{marketplace_search:{feed_units:{edges:structured.map(listing => ({node:{listing}}))}}}}, limit).listings;
-  const listings = [];
-  const seen = new Set();
+  const listings = structured.length ? parseSearchResponse({data:{marketplace_search:{feed_units:{edges:structured.map(listing => ({node:{listing}}))}}}}, limit).listings : [];
+  const seen = new Set(listings.map(listing => listing.id));
   const anchorPattern = /<a\b([^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*)>([\s\S]*?)<\/a\s*>/gi;
   let match;
   while (listings.length < limit && (match = anchorPattern.exec(html))) {
     const href = decodeHtml(match[2] ?? match[3] ?? "");
     const id = href.match(/\/marketplace\/item\/(\d+)/)?.[1];
-    if (!id || seen.has(id)) continue;
+    if (!id || seen.has(id) || (listingIds && !listingIds.has(id))) continue;
     seen.add(id);
 
     const markup = match[4];
@@ -839,6 +838,7 @@ export class FacebookGraphqlClient {
     this.useChromeCookies = options.useChromeCookies ?? process.env.FB_USE_CHROME_COOKIES === "true";
     this.userAgent = options.facebookUserAgent ?? DEFAULT_USER_AGENT;
     this.searchBaseUrl = options.facebookSearchBaseUrl ?? MARKETPLACE_SEARCH_URL;
+    this.searchSource = options.facebookSearchSource ?? "graphql";
     this.session = null;
     this.reqCounter = 0;
     this.requestsPerMinute = Number(options.facebookMaxRequestsPerMinute ?? process.env.FB_MAX_REQUESTS_PER_MINUTE ?? 3);
@@ -1094,6 +1094,16 @@ export class FacebookGraphqlClient {
   }
 
   async performSearchListings(params) {
+    if ((params.searchSource ?? this.searchSource) === "browser") {
+      const {searchMarketplaceBrowser} = await import("./facebookBrowserSearch.js");
+      const result = await searchMarketplaceBrowser(params, {cookieHeader: this.cookieHeader,
+        requestsPerMinute: this.requestsPerMinute, schedule: this.scheduleRequest,
+        onCookieHeader: header => {this.cookieHeader = header; this.session = null;}});
+      Object.assign(this.lastSearchInspection, {cardSource: "marketplace_browser", listingCount: result.listings.length,
+        pageViewer: result.diagnostics.pageViewer, diagnostics: result.diagnostics,
+        basicListings: result.listings.map(({raw, ...listing}) => listing)});
+      return result;
+    }
     if (params.searchSource === "marketplace_search_page") return this.searchMarketplacePage(params);
     const data = await this.graphqlRequest(MARKETPLACE_SEARCH_DOC_ID, buildSearchVariables(params));
     const result = parseSearchResponse(data, params.limit);
