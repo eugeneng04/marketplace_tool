@@ -90,7 +90,8 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
   let running = false;
   let nextAllowedAt = 0;
   const status = () => job ?? {state:'idle'};
-  async function start({mode='configured', expectedSessionHash} = {}) {
+  async function start({mode='configured', expectedSessionHash, query='corvette'} = {}) {
+    if (typeof query !== "string" || !query.trim() || query.length > 100) throw new Error("Diagnostic query must contain 1 to 100 characters.");
     if (running) return status();
     const cooldown = await schedule.status();
     if (cooldown.paused) return {state:'paused', retryAt:cooldown.retryAt};
@@ -100,7 +101,7 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
     running = true;
     nextAllowedAt = Date.now() + 5 * 60_000;
     job = {state:'running', startedAt:new Date().toISOString(), runtime:process.version,
-      cookieConfigured:Boolean(config.facebookCookie), mode, query:'corvette', maxGraphqlRequests:4,
+      cookieConfigured:Boolean(config.facebookCookie), mode, query:query.trim(), maxGraphqlRequests:4,
       requests:[], listingCount:0, outcome:null};
     const cookieNames = new Set(browserCookies(config.facebookCookie).map(cookie=>cookie.name));
     job.sessionCookiePresent = {cUser:cookieNames.has('c_user'), xs:cookieNames.has('xs')};
@@ -206,7 +207,7 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
         }
       });
       stage = 'navigation';
-      await page.goto('https://www.facebook.com/marketplace/search/?query=corvette', {waitUntil:'commit', timeout:70_000});
+      await page.goto(`https://www.facebook.com/marketplace/search/?query=${encodeURIComponent(job.query)}`, {waitUntil:'commit', timeout:70_000});
       stage = 'observe_listings';
       const deadline = Date.now() + 60_000;
       while (!stopped && Date.now() < deadline) {
@@ -215,7 +216,17 @@ export function createBrowserDiagnostic({config, schedule = scheduleFacebookRequ
         if (['login_required','security_checkpoint'].includes(job.finalPageCategory)) {job.outcome=job.finalPageCategory; break;}
         const links = await page.locator('a[href*="/marketplace/item/"]:visible').evaluateAll(elements => elements.map(element => element.getAttribute('href')));
         job.listingCount = new Set(links.map(href => href.match(/\/marketplace\/item\/(\d+)/)?.[1]).filter(Boolean)).size;
-        if (job.listingCount > 0) {job.outcome='listings_visible'; break;}
+        if (job.listingCount > 0) {
+          const html = await page.content();
+          const viewerId = html.match(/"USER_ID"\s*:\s*"(\d+)"/)?.[1];
+          job.pageViewer = viewerId === '0' ? 'logged_out' : viewerId ? 'signed_in' : 'unknown';
+          const texts = await page.locator('a[href*="/marketplace/item/"]:visible').allTextContents();
+          const normalizedQuery = job.query.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+          job.queryMatchingCardCount = normalizedQuery ? texts.filter(text => text.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '').includes(normalizedQuery)).length : 0;
+          job.outcome = job.mode === 'configured' && job.pageViewer === 'logged_out' ? 'session_rejected'
+            : job.queryMatchingCardCount ? 'matching_listings_visible' : 'unverified_listings_visible';
+          break;
+        }
         await page.waitForTimeout(1000);
       }
       job.outcome ??= 'no_listings_observed';

@@ -77,3 +77,15 @@ normal saved-profile search remains GraphQL. Login pages and pages without
 parseable cards fail the probe. Page results report
 `requestedFiltersVerified: false` and do not provide pagination. Passing URL
 parameters does not establish that Facebook applied a saved profile's filters.
+
+The page probe now rejects an explicit logged-out viewer when a cookie is
+configured. It prefers embedded listing objects to retain their initial fields;
+anchor parsing separates listing badges from vehicle titles. The Render browser
+diagnostic accepts a bounded `query` and reports `pageViewer` and
+`queryMatchingCardCount`. Visible generic suggestions do not prove query matches
+or saved-profile filtering. No saved-search default changes until validation.
+
+`POST /facebook/search-inspection` accepts the same `searchSource` and an optional
+saved `profileId`. It runs asynchronously and preserves the selected profile's
+query and filters, with the existing diagnostic freshness override and pacing.
+This is a diagnostic and does not ingest listings.

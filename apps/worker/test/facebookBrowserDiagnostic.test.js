@@ -103,3 +103,21 @@ test('diagnostic hides launch errors and limits repeated starts', async () => {
   assert.equal((await diagnostic.start()).state,'paused');
   assert.equal(launches,1);
 });
+
+for (const [viewer, query, expectedMatches] of [['0','frs',1],['123','frs',1],['123','!!!',0],['123','丰田',0]]) {
+  test(`browser diagnostic checks query matches and viewer ${viewer === '0' ? 'rejection' : 'identity'} for ${query}`, async () => {
+    let visited;
+    const page={on:()=>{},goto:async url=>{visited=url;},url:()=>visited,
+      content:async()=>`{"USER_ID":"${viewer}"}`,
+      locator:()=>({evaluateAll:async()=>['/marketplace/item/123/'],allTextContents:async()=>['2013 Scion FR-S $10,000']})};
+    const browser={version:()=> 'test',newContext:async()=>({addCookies:async()=>{},newPage:async()=>page,route:async()=>{}}),close:async()=>{}};
+    const schedule=Object.assign(async fn=>fn(),{status:async()=>({paused:false})});
+    const diagnostic=createBrowserDiagnostic({config:{facebookCookie:'c_user=123; xs=abc',facebookMaxRequestsPerMinute:3},schedule,launch:async()=>browser});
+    await diagnostic.start({query});
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(new URL(visited).searchParams.get('query'),query);
+    assert.equal(diagnostic.status().queryMatchingCardCount,expectedMatches);
+    assert.equal(diagnostic.status().pageViewer,viewer === '0' ? 'logged_out' : 'signed_in');
+    assert.equal(diagnostic.status().outcome,viewer === '0' ? 'session_rejected' : expectedMatches ? 'matching_listings_visible' : 'unverified_listings_visible');
+  });
+}

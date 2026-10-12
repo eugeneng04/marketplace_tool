@@ -418,3 +418,24 @@ test('page search refuses external redirects before forwarding session cookies',
   await assert.rejects(client.searchListings({searchSource:'marketplace_search_page',query:'frs',limit:3}), /away from Facebook/);
   assert.equal(requests,1);
 });
+
+test('page cards separate badges, price, vehicle title and location', () => {
+  const [listing] = parseMarketplaceSearchHtml('<a href="/marketplace/item/123/"><span>Just listed</span><span>$5,850</span><span>2017 Hyundai sonata</span><span>Palo Alto, CA</span></a>');
+  assert.equal(listing.title,'2017 Hyundai sonata');
+  assert.equal(listing.location,'Palo Alto, CA');
+});
+
+test('page cards retain richer initial fields from embedded listing objects', () => {
+  const listing = {id:'123',marketplace_listing_title:'Scion FR-S',listing_price:{formatted_amount:'$10,000'},vehicle_attributes:{transmission:'Manual'},creation_time:1757000000};
+  const [card] = parseMarketplaceSearchHtml(`<script type="application/json">${JSON.stringify({listing})}</script>`);
+  assert.equal(card.title,'Scion FR-S');
+  assert.equal(card.raw.vehicle_attributes.transmission,'Manual');
+  assert.ok(card.postedDate);
+});
+
+test('configured page search rejects explicit logged-out viewer despite visible cards', async () => {
+  const client = new FacebookGraphqlClient({facebookCookie:'c_user=123; xs=test',useChromeCookies:false});
+  client.request = async () => new Response('<script>{"USER_ID":"0"}</script><a href="/marketplace/item/123/">Scion FR-S $10,000</a>');
+  await assert.rejects(client.searchListings({searchSource:'marketplace_search_page',query:'frs',limit:3}), /logged-out viewer/);
+  assert.equal(client.lastSearchInspection.pageViewer,'logged_out');
+});

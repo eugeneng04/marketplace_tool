@@ -346,6 +346,20 @@ function stripHtml(value) {
 }
 
 export function parseMarketplaceSearchHtml(html, limit = 25) {
+  const structured = [];
+  for (const block of html.matchAll(/<script\b[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const value = JSON.parse(block[1]);
+      const pending = [value];
+      while (pending.length) {
+        const node = pending.pop();
+        if (!node || typeof node !== "object") continue;
+        if (node.id && typeof node.marketplace_listing_title === "string") structured.push(node);
+        for (const child of Object.values(node)) if (child && typeof child === "object") pending.push(child);
+      }
+    } catch { /* Ignore script blocks that are not JSON. */ }
+  }
+  if (structured.length) return parseSearchResponse({data:{marketplace_search:{feed_units:{edges:structured.map(listing => ({node:{listing}}))}}}}, limit).listings;
   const listings = [];
   const seen = new Set();
   const anchorPattern = /<a\b([^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*)>([\s\S]*?)<\/a\s*>/gi;
@@ -361,9 +375,13 @@ export function parseMarketplaceSearchHtml(html, limit = 25) {
     const priceMatch = text.match(/\$\s?[\d,]+(?:\.\d{2})?/);
     const price = priceMatch?.[0].replace(/\s+/g, "") ?? "";
     const beforePrice = priceMatch ? text.slice(0, priceMatch.index).trim() : text;
-    const title = beforePrice || `Marketplace listing ${id}`;
+    const spans = [...markup.matchAll(/<span\b[^>]*>([^<]*)<\/span>/gi)].map(match => stripHtml(match[1])).filter(Boolean);
+    const locationSpan = spans.findLast(value => /.+?,\s*[A-Z]{2}$/.test(value));
+    const titleSpan = spans.find(value => !/^(?:Just listed|New listing|Pending|Sold|Reduced|Free)$/i.test(value) &&
+      !value.includes("$") && value !== locationSpan);
+    const title = titleSpan || (beforePrice && !/^Just listed$/i.test(beforePrice) ? beforePrice : `Marketplace listing ${id}`);
     const afterPrice = priceMatch ? text.slice(priceMatch.index + priceMatch[0].length).trim() : "";
-    const location = afterPrice.match(/(?:reduced from\s+\$[\d,.]+\s*)?(.+?,\s*[A-Z]{2})\s*$/i)?.[1]?.trim() ?? "";
+    const location = locationSpan ?? afterPrice.match(/(?:reduced from\s+\$[\d,.]+\s*)?(.+?,\s*[A-Z]{2})\s*$/i)?.[1]?.trim() ?? "";
     const imageMatch = markup.match(/<(?:img|image)\b[^>]*\b(?:src|data-src)\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
     const imageUrl = decodeHtml(imageMatch?.[1] ?? imageMatch?.[2] ?? "");
     const listingUrl = `https://www.facebook.com/marketplace/item/${id}/`;
@@ -1206,9 +1224,17 @@ export class FacebookGraphqlClient {
     }
     const html = Buffer.concat(chunks).toString("utf8");
     const finalUrl = url;
+    Object.assign(this.lastSearchInspection, {searchQueryRetained: finalUrl.searchParams.get("query") === params.query,
+      finalPageIsSearch: /\/marketplace\/[^?]*search\/?$/.test(finalUrl.pathname)});
     if (/\/(?:login|checkpoint)(?:\/|$)/i.test(finalUrl.pathname) || /id=["']login_form["']/i.test(html)) {
       this.session = null;
       throw new Error("Facebook redirected the Marketplace search to login. Sign in and retry the search.");
+    }
+    const viewerId = html.match(/"USER_ID"\s*:\s*"(\d+)"/)?.[1];
+    Object.assign(this.lastSearchInspection, {pageViewer: viewerId === "0" ? "logged_out" : viewerId ? "signed_in" : "unknown"});
+    if (viewerId === "0" && cookieHeader) {
+      this.session = null;
+      throw new Error("Facebook rejected the configured session with an explicit logged-out viewer.");
     }
     const listings = parseMarketplaceSearchHtml(html, params.limit);
     if (!listings.length) throw new Error("Marketplace page contained no verifiable listing cards. Search completion could not be established.");
