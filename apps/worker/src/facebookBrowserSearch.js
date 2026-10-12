@@ -9,13 +9,6 @@ export async function searchMarketplaceBrowser(params, {cookieHeader, requestsPe
     throw new Error('Search URLs must point to a Facebook Marketplace page.');
   }
   url.searchParams.set('query',params.query);
-  for (const key of ['minPrice','maxPrice','latitude','longitude']) {
-    if (params[key] !== undefined) url.searchParams.set(key,`${params[key]}`);
-  }
-  if (params.radiusKm !== undefined) url.searchParams.set('radius',`${Math.round(params.radiusKm / 1.60934)}`);
-  url.searchParams.set('sortBy','creation_time_descend');
-  url.searchParams.set('daysSinceListed',`${params.newestWithinDays ?? 1}`);
-  if (params.category) url.searchParams.set('category_id',params.category);
   const status = await schedule.status();
   if (status.paused) {
     const error = new Error(`Facebook requests are paused until ${status.retryAt}.`);
@@ -87,13 +80,15 @@ export async function searchMarketplaceBrowser(params, {cookieHeader, requestsPe
         if (cookieHeader && (!viewerId || viewerId==='0')) throw new Error('Facebook browser session could not be verified as signed in.');
         const ids=new Set(visibleIds);
         const listings=parseMarketplaceSearchHtml(html,params.limit,ids);
-        if (listings.length) {
+        const normalizedQuery=params.query.toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
+        const matchingCards=listings.filter(listing=>listing.title.toLowerCase().replace(/[^\p{L}\p{N}]/gu,'').includes(normalizedQuery));
+        if (normalizedQuery && matchingCards.length) {
           accepting=false;
           await Promise.allSettled([...inFlight]);
           if (upstreamFailure) throw upstreamFailure;
           if (onCookieHeader) onCookieHeader((await context.cookies('https://www.facebook.com/')).map(cookie=>`${cookie.name}=${cookie.value}`).join('; '));
-          return {listings,hasNextPage:false,endCursor:null,diagnostics:{cardSource:'marketplace_browser',pageViewer:viewerId && viewerId!=='0'?'signed_in':'unknown',
-            pageCardCount:listings.length,requests,paginationAvailable:false,requestedFiltersVerified:false}};
+          return {listings:matchingCards,hasNextPage:false,endCursor:null,diagnostics:{cardSource:'marketplace_browser',pageViewer:viewerId && viewerId!=='0'?'signed_in':'unknown',
+            pageCardCount:listings.length,queryMatchingCardCount:matchingCards.length,requests,paginationAvailable:false,requestedFiltersVerified:false}};
         }
       }
       await page.waitForTimeout(500);

@@ -95,8 +95,8 @@ This is a diagnostic and does not ingest listings.
 The worker's `FB_SEARCH_SOURCE` defaults to `browser`. `graphql` retains the
 existing direct operation for explicit testing. Saved searches collect rendered
 cards in a fresh Render headless Chromium context with the configured cookie.
-The search sends the saved query, coordinates, price, radius, category and
-freshness URL parameters. It uses the shared cooldown and pacing, caps document
+The search sends the saved query using the verified query-only URL. It uses
+the shared cooldown and pacing, caps document
 and GraphQL requests, blocks image downloads, and closes the browser after
 collection. It fetches no listing details or gallery during search. Browser
 session cookies stay in memory for subsequent conditional GraphQL detail calls.
@@ -108,3 +108,12 @@ status and transmission remain unverified under the existing qualification flow.
 HTML pagination and server-side application of every URL filter remain
 unverified; `requestedFiltersVerified: false` records this limitation. Empty or
 unverifiable browser results fail rather than claim successful collection.
+
+Production saved-profile verification found that adding geographic and freshness
+URL parameters returned generic visible cards. The browser collector now uses
+the query-only URL that the Render diagnostic verified, and requires at least
+one title matching the normalized query before accepting cards. Only cards
+whose titles contain the normalized query are returned; related listings
+without that title text are excluded. Geographic,
+price and freshness URL filters are not asserted as applied. Parsed vehicle
+filters still qualify cards locally, and unknown fields remain unverified.

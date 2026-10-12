@@ -30,7 +30,7 @@ Backend-first MVP for local-first resale intelligence, designed to run as a web 
 - `mock`: deterministic synthetic Marketplace data for testing.
 - `facebook_graphql`: Marketplace collection through rendered search cards, with GraphQL for conditional listing details.
 
-`FB_SEARCH_SOURCE=browser` is the default. Search runs use an isolated Playwright Chromium context; Render supplies its browser in the Docker image. Configure `FB_COOKIE` for authenticated collection. `FB_SEARCH_SOURCE=graphql` selects direct HTTP search and cookie-free page tokens when no cookie is configured. Facebook can reject either session or request context; verify actual search results after deployment. Local direct GraphQL mode can explicitly extract Chrome-session cookies with `FB_USE_CHROME_COOKIES=true`.
+`FB_SEARCH_SOURCE=browser` is the default. Search runs use an isolated Playwright Chromium context; Render supplies its browser in the Docker image. Configure `FB_COOKIE` for authenticated collection. Browser collection uses a query-only URL; geography, price and freshness filtering by Facebook are unverified. `FB_SEARCH_SOURCE=graphql` selects direct HTTP search and cookie-free page tokens when no cookie is configured. Facebook can reject either session or request context; verify actual search results after deployment. Local direct GraphQL mode can explicitly extract Chrome-session cookies with `FB_USE_CHROME_COOKIES=true`.
 
 ## Environment variables
 

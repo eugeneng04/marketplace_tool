@@ -14,14 +14,14 @@ function fixture({viewer='123',html,visibleIds=['123']}={}) {
 const params={query:'frs',latitude:37.4,longitude:-121.9,radiusKm:161,minPrice:1000,maxPrice:20000,limit:5};
 const schedule=Object.assign(async fn=>fn(),{status:async()=>({paused:false})});
 
-test('browser search collects visible cards with saved filters and updates session cookies privately',async()=>{
+test('browser search collects visible cards with the query URL and updates session cookies privately',async()=>{
   const f=fixture();let cookieHeader;
   const result=await searchMarketplaceBrowser(params,{cookieHeader:'c_user=123; xs=old',schedule,launch:f.launch,onCookieHeader:value=>{cookieHeader=value;}});
   const url=new URL(f.visited());
   assert.equal(url.searchParams.get('query'),'frs');
-  assert.equal(url.searchParams.get('radius'),'100');
-  assert.equal(url.searchParams.get('minPrice'),'1000');
-  assert.equal(url.searchParams.get('maxPrice'),'20000');
+  assert.equal(url.searchParams.size,1);
+  assert.equal(result.diagnostics.queryMatchingCardCount,1);
+  assert.equal(result.diagnostics.requestedFiltersVerified,false);
   assert.equal(result.listings[0].title,'Scion FR-S');
   assert.equal(result.diagnostics.cardSource,'marketplace_browser');
   assert.equal(cookieHeader,'c_user=123; xs=renewed');
@@ -69,4 +69,21 @@ test('worker client factory preserves browser source for saved profile collectio
   assert.equal(createFacebookGraphqlClient({facebookSearchSource:'browser'}).searchSource,'browser');
   assert.equal(createFacebookGraphqlConnector({facebookSearchSource:'browser'}).client.searchSource,'browser');
   assert.equal(createFacebookConnector({mode:'facebook_graphql',facebookSearchSource:'browser'}).client.searchSource,'browser');
+});
+
+ test('generic visible suggestions cannot complete a saved query search',async()=>{
+  const f=fixture({html:'<a href="/marketplace/item/123/">Toyota Corolla $10,000</a>'});
+  await assert.rejects(searchMarketplaceBrowser(params,{cookieHeader:'c_user=123; xs=old',schedule,launch:f.launch}),/failed/);
+  assert.equal(f.closed(),1);
+});
+
+test('punctuation-only query cannot match generic cards',async()=>{
+  const f=fixture();
+  await assert.rejects(searchMarketplaceBrowser({...params,query:'!!!'},{cookieHeader:'c_user=123; xs=old',schedule,launch:f.launch}),/failed/);
+});
+
+test('only query-matching visible cards are returned',async()=>{
+  const f=fixture({visibleIds:['123','999'],html:'<a href="/marketplace/item/123/">Scion FR-S $10,000</a><a href="/marketplace/item/999/">Toyota Corolla $10,000</a>'});
+  const result=await searchMarketplaceBrowser(params,{cookieHeader:'c_user=123; xs=old',schedule,launch:f.launch});
+  assert.deepEqual(result.listings.map(x=>x.id),['123']);
 });
