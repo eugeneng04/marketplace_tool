@@ -385,3 +385,36 @@ test("shared limiter rejection retains sanitized search response and enforces co
   await assert.rejects(schedule(async()=>{requested=true;}), {code:'FACEBOOK_COOLDOWN'});
   assert.equal(requested,false);
 });
+
+test('page search uses a document request without GraphQL or detail calls', async () => {
+  const client = new FacebookGraphqlClient({facebookCookie: 'c_user=123; xs=test', useChromeCookies:false});
+  client.graphqlRequest = async () => {throw new Error('GraphQL must not run');};
+  let requestedUrl;
+  client.request = async (url, options) => {
+    requestedUrl = url;
+    assert.equal(options.headers.cookie, 'c_user=123; xs=test');
+    return new Response('<a href="/marketplace/item/123/"><img src="https://example.com/image">2015 Scion FR-S $12,000 Milpitas, CA</a>');
+  };
+  const result = await client.searchListings({searchSource:'marketplace_search_page',query:'frs',latitude:37.4,longitude:-121.9,radiusKm:161,limit:3});
+  assert.equal(result.listings.length,1);
+  assert.equal(result.listings[0].id,'123');
+  assert.equal(requestedUrl.searchParams.get('query'),'frs');
+  assert.equal(result.diagnostics.requestedFiltersVerified,false);
+  assert.equal(client.lastSearchInspection.cardSource,'marketplace_search_page');
+});
+
+test('page search rejects login pages and unverifiable empty pages', async () => {
+  for (const html of ['<form id="login_form"></form>','<html>No cards</html>']) {
+    const client = new FacebookGraphqlClient({useChromeCookies:false});
+    client.request = async () => new Response(html);
+    await assert.rejects(client.searchListings({searchSource:'marketplace_search_page',query:'frs',limit:3}), /login|no verifiable/);
+  }
+});
+
+test('page search refuses external redirects before forwarding session cookies', async () => {
+  const client = new FacebookGraphqlClient({facebookCookie:'c_user=123; xs=test',useChromeCookies:false});
+  let requests = 0;
+  client.request = async () => {requests++;return new Response('',{status:302,headers:{location:'https://example.com/'}});};
+  await assert.rejects(client.searchListings({searchSource:'marketplace_search_page',query:'frs',limit:3}), /away from Facebook/);
+  assert.equal(requests,1);
+});

@@ -187,7 +187,7 @@ function parseNumber(value, fallback = undefined) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function parseFacebookSearchInput(body) {
+export function parseFacebookSearchInput(body) {
   if (!body.query) {
     throw new Error("query is required.");
   }
@@ -200,6 +200,7 @@ function parseFacebookSearchInput(body) {
 
   return {
     query: `${body.query}`,
+    searchSource: body.searchSource === "marketplace_search_page" ? body.searchSource : undefined,
     latitude,
     longitude,
     radiusKm: parseNumber(body.radiusKm ?? body.radius_km, 50),

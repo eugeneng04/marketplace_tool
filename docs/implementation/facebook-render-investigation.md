@@ -67,3 +67,13 @@ The detail decoder now recognizes this signature only with conservative metadata
 Mocked HTTP regression tests first reproduced rejection of the reviewed response and failure of its saved refresh. The corrected decoder passes these tests, including the actual connector, vehicle parser, and sync persistence callback. Tests cover malformed metadata, missing required fields, malformed consumed containers, authentication, throttling, other operations, and failed requested photo enrichment. No private metadata values are retained in omission evidence or rejection diagnostics.
 
 This local verification does not establish the live nullable field and metadata shapes, signed-in Facebook identity, profile filtering, or saved ingestion. After deployment, a direct detail replay must establish whether the conservative checks accept the current response. A saved run must then verify collection separately. Rejected detail diagnostics report bounded value shapes without their values.
+
+### Direct search-page probe
+
+`POST /facebook/search` accepts `searchSource: "marketplace_search_page"` for an
+explicit document-only search. It uses the configured Facebook cookie and shared
+request limiter, without a search GraphQL POST or listing-detail requests. The
+normal saved-profile search remains GraphQL. Login pages and pages without
+parseable cards fail the probe. Page results report
+`requestedFiltersVerified: false` and do not provide pagination. Passing URL
+parameters does not establish that Facebook applied a saved profile's filters.

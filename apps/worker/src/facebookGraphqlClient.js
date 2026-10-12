@@ -1076,6 +1076,7 @@ export class FacebookGraphqlClient {
   }
 
   async performSearchListings(params) {
+    if (params.searchSource === "marketplace_search_page") return this.searchMarketplacePage(params);
     const data = await this.graphqlRequest(MARKETPLACE_SEARCH_DOC_ID, buildSearchVariables(params));
     const result = parseSearchResponse(data, params.limit);
     const safeData = sanitizeFacebookEvidence(data, this.session ?? {cookieHeader: this.cookieHeader});
@@ -1160,6 +1161,64 @@ export class FacebookGraphqlClient {
     }
     this.lastSearchInspection = inspection;
     return result;
+  }
+
+  async searchMarketplacePage(params) {
+    const searchUrl = new URL(params.searchUrl || this.searchBaseUrl);
+    if (searchUrl.protocol !== "https:" || !/(^|\.)facebook\.com$/i.test(searchUrl.hostname) || !searchUrl.pathname.startsWith("/marketplace/") || searchUrl.username || searchUrl.password) {
+      throw new Error("Search URLs must point to a Facebook Marketplace page.");
+    }
+    searchUrl.searchParams.set("query", params.query);
+    for (const key of ["minPrice", "maxPrice", "latitude", "longitude"]) {
+      if (params[key] !== undefined) searchUrl.searchParams.set(key, `${params[key]}`);
+    }
+    if (params.radiusKm !== undefined) searchUrl.searchParams.set("radius", `${Math.round(params.radiusKm / 1.60934)}`);
+    searchUrl.searchParams.set("sortBy", "creation_time_descend");
+    searchUrl.searchParams.set("daysSinceListed", `${params.newestWithinDays ?? DEFAULT_NEWEST_WITHIN_DAYS}`);
+    if (params.category) searchUrl.searchParams.set("category_id", params.category);
+    const cookieHeader = this.session?.cookieHeader ?? this.cookieHeader;
+    if (this.useChromeCookies && !cookieHeader) throw new Error("Page searches require configured FB_COOKIE.");
+    let url = searchUrl;
+    let response;
+    for (let hop = 0; hop < 4; hop++) {
+      if (url.protocol !== "https:" || !/(^|\.)facebook\.com$/i.test(url.hostname) || url.username || url.password) {
+        throw new Error("Marketplace search redirected away from Facebook.");
+      }
+      response = await this.request(url, {
+        headers: { ...BROWSER_HEADERS, "user-agent": this.userAgent, cookie: cookieHeader,
+          accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "sec-fetch-dest": "document", "sec-fetch-mode": "navigate", "sec-fetch-site": "none" },
+        redirect: "manual"
+      });
+      if (response.status < 300 || response.status >= 400 || !response.headers.get("location")) break;
+      await response.body?.cancel();
+      url = new URL(response.headers.get("location"), url);
+    }
+    if (!response.ok) throw new Error(`Marketplace search page returned HTTP ${response.status}.`);
+    const chunks = [];
+    let bytes = 0;
+    for await (const chunk of response.body) {
+      bytes += chunk.length;
+      if (bytes > 5_000_000) {
+        throw new Error("Marketplace search page exceeded the size limit.");
+      }
+      chunks.push(chunk);
+    }
+    const html = Buffer.concat(chunks).toString("utf8");
+    const finalUrl = url;
+    if (/\/(?:login|checkpoint)(?:\/|$)/i.test(finalUrl.pathname) || /id=["']login_form["']/i.test(html)) {
+      this.session = null;
+      throw new Error("Facebook redirected the Marketplace search to login. Sign in and retry the search.");
+    }
+    const listings = parseMarketplaceSearchHtml(html, params.limit);
+    if (!listings.length) throw new Error("Marketplace page contained no verifiable listing cards. Search completion could not be established.");
+    Object.assign(this.lastSearchInspection, {cardSource: "marketplace_search_page", listingCount: listings.length,
+      transport: {operation: "Marketplace search page", httpStatus: response.status, bodyLength: html.length},
+      listingFields: inspectSearchPayload({listings: listings.map(listing => listing.raw)}),
+      basicListings: listings.map(({raw, ...listing}) => listing)});
+    return {listings, hasNextPage: false, endCursor: null,
+      diagnostics: {cardSource: "marketplace_search_page", pageCardCount: listings.length, paginationAvailable: false,
+        requestedFiltersVerified: false}};
   }
 
   async getListingDetail(listingId, { fetchPhotos = true } = {}) {
